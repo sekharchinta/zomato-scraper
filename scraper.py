@@ -1504,16 +1504,21 @@ class ZomatoScraper:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
 
-    def ensure_csrf_token(self) -> str:
+    def ensure_csrf_token(self, force_refresh: bool = False) -> str:
         """Obtain a valid CSRF token from session cookie, API, or config override."""
-        if self.config.zomato_csrf:
-            self.csrf_token = self.config.zomato_csrf
-            return self.csrf_token
+        if not force_refresh:
+            if self.config.zomato_csrf:
+                self.csrf_token = self.config.zomato_csrf
+                return self.csrf_token
 
-        cookie_csrf = self.session.cookies.get("csrf")
-        if cookie_csrf:
-            self.csrf_token = cookie_csrf
-            return self.csrf_token
+            cookie_csrf = self.session.cookies.get("csrf")
+            if cookie_csrf:
+                self.csrf_token = cookie_csrf
+                return self.csrf_token
+
+        # Ensure headers have valid desktop browser User-Agent
+        self.session.headers.setdefault("user-agent", DEFAULT_HEADERS["user-agent"])
+        self.session.headers.setdefault("sec-ch-ua-platform", DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"'))
 
         try:
             logger.info("Fetching fresh CSRF token from %s...", CSRF_API_URL)
@@ -1537,6 +1542,10 @@ class ZomatoScraper:
         except Exception as exc:
             logger.warning("Failed to warm session: %s", exc)
 
+        if self.session.cookies.get("csrf"):
+            self.csrf_token = self.session.cookies.get("csrf")
+            return self.csrf_token
+
         raise RuntimeError("Unable to obtain a valid Zomato CSRF token.")
 
     def get_location_suggestions(self, query: str) -> List[Dict[str, Any]]:
@@ -1553,7 +1562,9 @@ class ZomatoScraper:
         if resp.status_code == 401:
             logger.info("Received 401 Unauthorized for location search; warming session & refreshing CSRF...")
             try:
-                csrf = self.ensure_csrf_token()
+                self.session.headers["user-agent"] = DEFAULT_HEADERS["user-agent"]
+                self.session.headers["sec-ch-ua-platform"] = DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"')
+                csrf = self.ensure_csrf_token(force_refresh=True)
                 if csrf:
                     self.session.headers["x-zomato-csrft"] = csrf
                 resp = self.session.get(
@@ -1601,7 +1612,9 @@ class ZomatoScraper:
         if resp.status_code == 401:
             logger.info("Received 401 Unauthorized for keyword search; warming session & refreshing CSRF...")
             try:
-                csrf = self.ensure_csrf_token()
+                self.session.headers["user-agent"] = DEFAULT_HEADERS["user-agent"]
+                self.session.headers["sec-ch-ua-platform"] = DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"')
+                csrf = self.ensure_csrf_token(force_refresh=True)
                 if csrf:
                     self.session.headers["x-zomato-csrft"] = csrf
                 resp = self.session.get(
@@ -1660,7 +1673,9 @@ class ZomatoScraper:
                 timeout=self.config.request_timeout,
             )
             if resp.status_code == 401:
-                csrf = self.ensure_csrf_token()
+                self.session.headers["user-agent"] = DEFAULT_HEADERS["user-agent"]
+                self.session.headers["sec-ch-ua-platform"] = DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"')
+                csrf = self.ensure_csrf_token(force_refresh=True)
                 if csrf:
                     self.session.headers["x-zomato-csrft"] = csrf
                 resp = self.session.get(
