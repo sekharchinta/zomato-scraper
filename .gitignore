@@ -46,6 +46,8 @@ output_delivery/
 # Logs and databases
 *.log
 *.sqlite3
+*.lock
+.worker_manager.lock
 
 # IDE / Editor
 .idea/

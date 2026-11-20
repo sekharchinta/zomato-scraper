@@ -1,0 +1,47 @@
+"""
+URL Configuration for Zomato-Scraper.
+"""
+
+from django.contrib import admin
+from django.urls import include, path
+
+from scraper_app.views import (
+    dashboard_view,
+    delete_batch_api,
+    export_csv_api,
+    get_collection_stats_api,
+    get_schema_fields_api,
+    get_scrape_data_api,
+    scrape_status_api,
+    search_locations_api,
+    start_queued_batch_api,
+    start_scrape_api,
+    terminate_batch_api,
+)
+
+# Customize Admin Site Branding
+admin.site.site_header = "Zomato-Scraper Admin Dashboard"
+admin.site.site_title = "Zomato-Scraper Admin"
+admin.site.index_title = "Zomato Scraping & Queue Management"
+
+urlpatterns = [
+    # User Dashboard
+    path("", dashboard_view, name="dashboard"),
+
+    # REST APIs
+    path("api/search-locations/", search_locations_api, name="api_search_locations"),
+    path("api/collection-stats/", get_collection_stats_api, name="api_collection_stats"),
+    path("api/get-schema-fields/", get_schema_fields_api, name="api_schema_fields"),
+    path("api/start-scrape/", start_scrape_api, name="api_start_scrape"),
+    path("api/scrape-status/<str:request_id>/", scrape_status_api, name="api_scrape_status"),
+    path("api/scrape-data/<str:request_id>/", get_scrape_data_api, name="api_scrape_data"),
+    path("api/delete-batch/<str:request_id>/", delete_batch_api, name="api_delete_batch"),
+    path("api/cancel-batch/<str:request_id>/", delete_batch_api, name="api_cancel_batch"),
+    path("api/terminate-batch/<str:request_id>/", terminate_batch_api, name="api_terminate_batch"),
+    path("api/start-queued-batch/<str:request_id>/", start_queued_batch_api, name="api_start_queued_batch"),
+    path("api/export-csv/<str:request_id>/", export_csv_api, name="api_export_csv"),
+
+    # Django Default Admin & RQ Monitoring
+    path("admin/django-rq/", include("django_rq.urls")),
+    path("admin/", admin.site.urls),
+]

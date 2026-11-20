@@ -1319,7 +1319,7 @@ class DeliveryDataParsingTests(unittest.TestCase):
         self.assertNotIn("cannonical_url", doc)
         self.assertNotIn("staticmapurl", doc)
         self.assertNotIn("review_count", doc)
-        self.assertNotIn("total_reviews", doc)
+        self.assertIn("total_reviews", doc)
 
     def test_sync_delivery_folder_to_mongo(self):
         # Create a sample detail file

@@ -81,6 +81,149 @@ def slugify(text: str) -> str:
     return re.sub(r"[\s_-]+", "_", cleaned).strip("_").lower()
 
 
+def extract_zomato_preloaded_state(html_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Extracts the window.__PRELOADED_STATE__ JSON object embedded inside Zomato
+    HTML pages. Contains complete data for entities (REVIEWS, RATING, RESTAURANTS)
+    and sections (SECTION_BASIC_INFO, SECTION_RES_DETAILS, SECTION_RES_CONTACT, SECTION_REVIEWS).
+    Bypasses 401 UNAUTHORISED API blocks by reading server preloaded state.
+    """
+    if not html_text:
+        return None
+
+    # Pattern 1: window.__PRELOADED_STATE__ = JSON.parse("...");
+    m1 = re.search(r'window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\((.*?)\);', html_text, re.DOTALL)
+    if m1:
+        raw = m1.group(1).strip()
+        try:
+            val = json.loads(raw)
+            if isinstance(val, str):
+                return json.loads(val)
+            return val
+        except Exception:
+            pass
+
+    # Pattern 2: window.__PRELOADED_STATE__ = { ... };
+    m2 = re.search(r'window\.__PRELOADED_STATE__\s*=\s*(\{.*?\});\s*(?:window\.|<\/script>)', html_text, re.DOTALL)
+    if m2:
+        try:
+            return json.loads(m2.group(1))
+        except Exception:
+            pass
+
+    # Pattern 3: <script id="__NEXT_DATA__">...</script>
+    m3 = re.search(r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html_text, re.DOTALL)
+    if m3:
+        try:
+            return json.loads(m3.group(1))
+        except Exception:
+            pass
+
+    return None
+
+
+CITY_URL_ALIASES = {
+    "bengaluru": "bangalore",
+    "bombay": "mumbai",
+    "calcutta": "kolkata",
+    "madras": "chennai",
+    "cochin": "kochi",
+    "trivandrum": "thiruvananthapuram",
+    "gurgaon": "ncr",
+    "noida": "ncr",
+}
+
+
+def fetch_city_html_fallback(
+    session: Optional[requests.Session],
+    city_query: str,
+    timeout: int = 10,
+) -> List[Dict[str, Any]]:
+    """
+    Universal fallback for location discovery and coordinates:
+    Fetches the public HTML webpage https://www.zomato.com/{city_slug} and parses
+    window.__PRELOADED_STATE__ for exact currentLocation coordinates (lat/lon)
+    and any localities in SECTION_CITY_MAGIC_LINKS.
+    Bypasses 401 Unauthorized API blocks.
+    """
+    clean_city = re.sub(r"[^\w\s-]", "", str(city_query)).strip()
+    if not clean_city:
+        return []
+    base_slug = clean_city.replace(" ", "-").lower()
+
+    # Determine candidate URL slugs (e.g. 'bengaluru' -> 'bangalore', 'amalapuram' -> 'amalapuram')
+    slug_candidates = [base_slug]
+    if base_slug in CITY_URL_ALIASES and CITY_URL_ALIASES[base_slug] not in slug_candidates:
+        slug_candidates.insert(0, CITY_URL_ALIASES[base_slug])
+
+    req_session = session or requests.Session()
+    # Avoid inheriting previous city stickiness
+    for cookie_name in ("fbcity", "locus", "ltv", "lty"):
+        req_session.cookies.pop(cookie_name, None)
+
+    for slug in slug_candidates:
+        url = f"{BASE_URL}/{slug}"
+        headers = dict(DEFAULT_HEADERS)
+        headers["referer"] = BASE_URL + "/"
+        try:
+            resp = req_session.get(url, headers=headers, timeout=timeout)
+            if resp.status_code != 200:
+                continue
+
+            st = extract_zomato_preloaded_state(resp.text)
+            if not st:
+                continue
+
+            curr = st.get("location", {}).get("currentLocation", {})
+            lat = curr.get("latitude") or curr.get("userDefinedLatitude")
+            lon = curr.get("longitude") or curr.get("userDefinedLongitude")
+            city_name = curr.get("cityName") or curr.get("entityName") or clean_city.title()
+            entity_id = curr.get("cityId") or curr.get("entityId") or 0
+
+            suggestions: List[Dict[str, Any]] = []
+            if lat is not None and lon is not None:
+                try:
+                    lat_f = float(lat)
+                    lon_f = float(lon)
+                    suggestions.append({
+                        "entity_id": entity_id,
+                        "entity_type": "city",
+                        "entity_title": city_name,
+                        "entity_name": f"{city_name}, India",
+                        "latitude": lat_f,
+                        "longitude": lon_f,
+                        "raw_suggestion": curr,
+                    })
+                except (ValueError, TypeError):
+                    pass
+
+            search_pages = st.get("pages", {}).get("search", {})
+            for _, page_data in search_pages.items():
+                if not isinstance(page_data, dict):
+                    continue
+                magic = page_data.get("sections", {}).get("SECTION_CITY_MAGIC_LINKS", {})
+                group_data = magic.get("groupCityData", {}).get("groupData", [])
+                for g in group_data:
+                    name = str(g.get("name", "")).strip()
+                    if name:
+                        suggestions.append({
+                            "entity_id": 0,
+                            "entity_type": "subzone",
+                            "entity_title": name,
+                            "entity_name": f"{name}, {city_name}",
+                            "latitude": float(lat) if lat else None,
+                            "longitude": float(lon) if lon else None,
+                            "raw_suggestion": g,
+                        })
+
+            if suggestions:
+                return suggestions
+        except Exception as exc:
+            logger.warning("HTML fallback request failed for '%s' (url=%s): %s", city_query, url, exc)
+
+    return []
+
+
 def get_location_city_folder(location: str, city: str) -> str:
     """
     Constructs a sanitized '{location}_{city}' folder name.
@@ -683,6 +826,9 @@ def build_delivery_data_document(
             "like_count": u_likes,
         })
 
+    # User specified requirement: total_reviews is the count of reviews which we scraped
+    total_reviews = len(reviews_list)
+
     doc = {
         "_id": res_id,                                # Primary key in MongoDB collection 'delivery_data'
         "restaurant_id": res_id,
@@ -698,6 +844,7 @@ def build_delivery_data_document(
         "votes": dining_votes,
         "delivery_rating": delivery_rating,
         "reviewcount": delivery_review_count,
+        "total_reviews": total_reviews,
         "static_map_url": static_map_url,
         "reviews": reviews_list,
         "parsed_at": datetime.now(timezone.utc).isoformat(),
@@ -1504,6 +1651,24 @@ class ZomatoScraper:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
 
+    def warm_session(self, force: bool = False) -> None:
+        """
+        Visits BASE_URL to acquire Akamai bot protection cookies ('ak_bmsc')
+        so subsequent requests to /webroutes/* are not rejected with 401 Unauthorized.
+        """
+        if not force and self.session.cookies.get("ak_bmsc"):
+            return
+
+        try:
+            logger.info("Warming session via base URL %s to acquire Akamai cookies...", BASE_URL)
+            self.session.headers.update(DEFAULT_HEADERS)
+            resp = self.session.get(BASE_URL, timeout=self.config.request_timeout)
+            if self.session.cookies.get("csrf"):
+                self.csrf_token = self.session.cookies.get("csrf")
+            logger.info("Session warm complete. Cookies: %s", list(self.session.cookies.keys()))
+        except Exception as exc:
+            logger.warning("Session warm attempt encountered error: %s", exc)
+
     def ensure_csrf_token(self, force_refresh: bool = False) -> str:
         """Obtain a valid CSRF token from session cookie, API, or config override."""
         if not force_refresh:
@@ -1552,48 +1717,60 @@ class ZomatoScraper:
         """
         Calls Search API (webroutes/location/search?q={query}) and returns
         all valid location suggestions with coordinates (latlums).
+        Automatically warms session and falls back to preloaded state HTML scraping
+        if the API returns 401 Unauthorized or has no suggestions.
         """
+        self.warm_session()
         logger.info("Searching Location API for '%s'...", query)
-        resp = self.session.get(
-            LOCATION_SEARCH_API_URL,
-            params={"q": query},
-            timeout=self.config.request_timeout,
-        )
-        if resp.status_code == 401:
-            logger.info("Received 401 Unauthorized for location search; warming session & refreshing CSRF...")
-            try:
-                self.session.headers["user-agent"] = DEFAULT_HEADERS["user-agent"]
-                self.session.headers["sec-ch-ua-platform"] = DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"')
-                csrf = self.ensure_csrf_token(force_refresh=True)
-                if csrf:
-                    self.session.headers["x-zomato-csrft"] = csrf
+        resp = None
+        try:
+            resp = self.session.get(
+                LOCATION_SEARCH_API_URL,
+                params={"q": query},
+                timeout=self.config.request_timeout,
+            )
+            if resp.status_code == 401:
+                logger.info("Received 401 Unauthorized for location search; warming session & refreshing...")
+                self.warm_session(force=True)
                 resp = self.session.get(
                     LOCATION_SEARCH_API_URL,
                     params={"q": query},
                     timeout=self.config.request_timeout,
                 )
-            except Exception as exc:
-                logger.warning("Session warm / retry failed: %s", exc)
-        resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("Location API request error for '%s': %s", query, exc)
 
-        data = resp.json()
-        raw_suggestions = data.get("locationSuggestions", [])
         valid_suggestions: List[Dict[str, Any]] = []
 
-        for s in raw_suggestions:
-            lat, lon = extract_latlums_from_suggestion(s)
-            if lat is not None and lon is not None:
-                title = str(s.get("entity_title") or s.get("display_title") or s.get("entity_name") or "Location").strip()
-                full_name = str(s.get("entity_name") or title).strip()
-                valid_suggestions.append({
-                    "entity_id": s.get("entity_id"),
-                    "entity_type": s.get("entity_type"),
-                    "entity_title": title,
-                    "entity_name": full_name,
-                    "latitude": lat,
-                    "longitude": lon,
-                    "raw_suggestion": s,
-                })
+        if resp is not None and resp.status_code == 200:
+            try:
+                data = resp.json()
+                raw_suggestions = data.get("locationSuggestions", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                for s in raw_suggestions:
+                    lat, lon = extract_latlums_from_suggestion(s)
+                    if lat is not None and lon is not None:
+                        title = str(s.get("entity_title") or s.get("display_title") or s.get("entity_name") or "Location").strip()
+                        full_name = str(s.get("entity_name") or title).strip()
+                        valid_suggestions.append({
+                            "entity_id": s.get("entity_id"),
+                            "entity_type": s.get("entity_type"),
+                            "entity_title": title,
+                            "entity_name": full_name,
+                            "latitude": lat,
+                            "longitude": lon,
+                            "raw_suggestion": s,
+                        })
+            except Exception as exc:
+                logger.warning("Failed to parse JSON from location search response: %s", exc)
+
+        # Universal Resilient Fallback: If Search API returned 0 valid suggestions or failed with 401,
+        # fallback to extracting window.__PRELOADED_STATE__ from city HTML
+        if not valid_suggestions:
+            logger.info("Search API returned no suggestions or failed; attempting preloaded state HTML fallback for '%s'...", query)
+            html_suggestions = fetch_city_html_fallback(self.session, query, timeout=self.config.request_timeout)
+            if html_suggestions:
+                valid_suggestions.extend(html_suggestions)
+                logger.info("Preloaded HTML fallback succeeded: found %d location suggestions for '%s'", len(valid_suggestions), query)
 
         logger.info("Retrieved %d valid location suggestion(s) with latlums for '%s'.", len(valid_suggestions), query)
         return valid_suggestions
@@ -1602,33 +1779,49 @@ class ZomatoScraper:
         """
         Calls Search API with city/keyword input and scrapes the latlums (latitude & longitude)
         from the nearest matching location suggestion.
+        Falls back to HTML preloaded state if Search API fails or 401s.
         """
+        self.warm_session()
         logger.info("Searching Location API for nearest keyword match to '%s'...", query)
-        resp = self.session.get(
-            LOCATION_SEARCH_API_URL,
-            params={"q": query},
-            timeout=self.config.request_timeout,
-        )
-        if resp.status_code == 401:
-            logger.info("Received 401 Unauthorized for keyword search; warming session & refreshing CSRF...")
-            try:
-                self.session.headers["user-agent"] = DEFAULT_HEADERS["user-agent"]
-                self.session.headers["sec-ch-ua-platform"] = DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"')
-                csrf = self.ensure_csrf_token(force_refresh=True)
-                if csrf:
-                    self.session.headers["x-zomato-csrft"] = csrf
+        resp = None
+        try:
+            resp = self.session.get(
+                LOCATION_SEARCH_API_URL,
+                params={"q": query},
+                timeout=self.config.request_timeout,
+            )
+            if resp.status_code == 401:
+                logger.info("Received 401 Unauthorized for keyword search; warming session...")
+                self.warm_session(force=True)
                 resp = self.session.get(
                     LOCATION_SEARCH_API_URL,
                     params={"q": query},
                     timeout=self.config.request_timeout,
                 )
-            except Exception as exc:
-                logger.warning("Session warm / retry failed: %s", exc)
-        resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("Keyword search request error for '%s': %s", query, exc)
 
-        data = resp.json()
-        suggestions = data.get("locationSuggestions", [])
+        suggestions = []
+        if resp is not None and resp.status_code == 200:
+            try:
+                data = resp.json()
+                suggestions = data.get("locationSuggestions", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            except Exception:
+                suggestions = []
+
         if not suggestions:
+            # Universal HTML Fallback
+            logger.info("Search API returned no suggestions for '%s'; trying HTML preloaded state fallback...", query)
+            html_sugs = fetch_city_html_fallback(self.session, query, timeout=self.config.request_timeout)
+            if html_sugs:
+                first = html_sugs[0]
+                lat = first.get("latitude")
+                lon = first.get("longitude")
+                if lat is not None and lon is not None:
+                    name = first.get("entity_name") or first.get("entity_title") or query
+                    logger.info("HTML fallback matched: '%s' -> Scraped Latlums: lat=%s, lon=%s", name, lat, lon)
+                    return lat, lon, first
+
             raise ValueError(f"No location suggestions returned for search keyword: '{query}'")
 
         logger.info("Received %d suggestion(s) from Search API.", len(suggestions))
@@ -1636,7 +1829,14 @@ class ZomatoScraper:
         lat, lon = extract_latlums_from_suggestion(nearest)
 
         if lat is None or lon is None:
-            raise ValueError(f"Unable to extract lat/lon coordinates from suggestion: {nearest}")
+            # Check HTML fallback as well
+            html_sugs = fetch_city_html_fallback(self.session, query, timeout=self.config.request_timeout)
+            if html_sugs and html_sugs[0].get("latitude") is not None:
+                lat = html_sugs[0]["latitude"]
+                lon = html_sugs[0]["longitude"]
+                nearest = html_sugs[0]
+            else:
+                raise ValueError(f"Unable to extract lat/lon coordinates from suggestion: {nearest}")
 
         name = nearest.get("entity_name") or nearest.get("entity_title") or query
         logger.info("Nearest keyword matched: '%s' -> Scraped Latlums: lat=%s, lon=%s", name, lat, lon)
@@ -1673,11 +1873,7 @@ class ZomatoScraper:
                 timeout=self.config.request_timeout,
             )
             if resp.status_code == 401:
-                self.session.headers["user-agent"] = DEFAULT_HEADERS["user-agent"]
-                self.session.headers["sec-ch-ua-platform"] = DEFAULT_HEADERS.get("sec-ch-ua-platform", '"Windows"')
-                csrf = self.ensure_csrf_token(force_refresh=True)
-                if csrf:
-                    self.session.headers["x-zomato-csrft"] = csrf
+                self.warm_session(force=True)
                 resp = self.session.get(
                     LOCATION_GET_API_URL,
                     params={"lat": lat, "lon": lon},
@@ -1748,20 +1944,20 @@ class ZomatoScraper:
         """Builds the POST payload for Restaurants API with offset and page."""
         payload: Dict[str, Any] = {
             "context": "dineout",
-            "entityId": str(loc["entity_id"]),
-            "entityType": str(loc["entity_type"]),
-            "cityId": str(loc["city_id"]),
-            "latitude": float(loc["latitude"]),
-            "longitude": float(loc["longitude"]),
-            "userDefinedLatitude": float(loc["user_defined_latitude"]),
-            "userDefinedLongitude": float(loc["user_defined_longitude"]),
-            "cityName": str(loc["city_name"]),
-            "countryId": str(loc["country_id"]),
-            "countryName": str(loc["country_name"]),
-            "placeId": str(loc["place_id"]),
-            "deliverySubzoneId": loc["delivery_subzone_id"],
-            "placeType": str(loc["place_type"]),
-            "cellId": str(loc["cell_id"]),
+            "entityId": str(loc.get("entity_id", "0")),
+            "entityType": str(loc.get("entity_type", "subzone")),
+            "cityId": str(loc.get("city_id", "6")),
+            "latitude": float(loc.get("latitude") or 17.3850),
+            "longitude": float(loc.get("longitude") or 78.4867),
+            "userDefinedLatitude": float(loc.get("user_defined_latitude") or loc.get("latitude") or 17.3850),
+            "userDefinedLongitude": float(loc.get("user_defined_longitude") or loc.get("longitude") or 78.4867),
+            "cityName": str(loc.get("city_name", "City")),
+            "countryId": str(loc.get("country_id", "1")),
+            "countryName": str(loc.get("country_name", "India")),
+            "placeId": str(loc.get("place_id", "0")),
+            "deliverySubzoneId": loc.get("delivery_subzone_id", 0),
+            "placeType": str(loc.get("place_type", "DSZ")),
+            "cellId": str(loc.get("cell_id", "0")),
             "filters": json.dumps({"searchMetadata": search_metadata}) if search_metadata else "{}",
             "solr_offset": offset,
             "page": page,
@@ -2310,19 +2506,41 @@ class ZomatoScraper:
             logger.error("Failed to request hotel details for '%s': %s", clean_url, exc)
             return None
 
-        if resp.status_code != 200:
-            logger.warning(
-                "Hotel details request for '%s' returned status %d: %s",
-                clean_url,
-                resp.status_code,
-                resp.text[:150],
-            )
-            return None
+        data = None
+        if resp is not None and resp.status_code == 200:
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
 
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            logger.error("Hotel details response for '%s' was not valid JSON: %s", clean_url, exc)
+        # Fallback to direct HTML preloaded state extraction if getPage returned non-200
+        if not data:
+            logger.info("getPage API returned non-200 for '%s'; extracting details via web HTML page...", clean_url)
+            try:
+                full_page_url = f"{BASE_URL}{clean_url}"
+                resp_html = self.session.get(full_page_url, headers=headers, timeout=self.config.request_timeout)
+                if resp_html.status_code == 200:
+                    st = extract_zomato_preloaded_state(resp_html.text)
+                    if st:
+                        curr = st.get("pages", {}).get("restaurant", {})
+                        sections = {}
+                        res_id_found = None
+                        for rk, rv in curr.items():
+                            if isinstance(rv, dict) and "sections" in rv:
+                                sections = rv["sections"]
+                                res_id_found = rk
+                                break
+                        data = {
+                            "page_data": {"sections": sections},
+                            "page_info": {"resId": int(res_id_found) if res_id_found and res_id_found.isdigit() else restaurant_id},
+                            "entities": st.get("entities", {}),
+                            "status": "success",
+                        }
+            except Exception as e_html:
+                logger.warning("HTML details extraction error for '%s': %s", clean_url, e_html)
+
+        if not data:
+            logger.warning("Unable to fetch hotel details for '%s'.", clean_url)
             return None
 
         # Determine restaurant ID
@@ -2494,6 +2712,9 @@ class ZomatoScraper:
             "filter": "reviews-dining",
         }
 
+        # Enforce 1.0s polite delay for reviews request
+        time.sleep(getattr(self.config, "reviews_request_delay", 1.0))
+
         use_getpage_fallback = False
         resp = None
         try:
@@ -2506,11 +2727,12 @@ class ZomatoScraper:
         except Exception as exc:
             logger.warning("Failed to request reviews page 1 from loadMore for restaurant ID %s: %s", res_id, exc)
 
-        # If 401 login popup triggered or request failed on loadMore, fallback to getPage server route
+        p1_data = None
+        # If 401 login popup triggered or request failed on loadMore, fallback to getPage or direct HTML web route
         if (resp is None or resp.status_code == 401) and clean_url_base:
             try:
                 logger.info(
-                    "Reviews page 1 prompted login (401); switching to getPage web route for restaurant ID %s...",
+                    "Reviews page 1 prompted login (401); switching to web route for restaurant ID %s...",
                     res_id,
                 )
                 use_getpage_fallback = True
@@ -2521,24 +2743,46 @@ class ZomatoScraper:
                     headers=headers,
                     timeout=self.config.request_timeout,
                 )
+                if resp.status_code != 200:
+                    # Direct HTML page fetch to bypass API 401
+                    full_html_url = f"{BASE_URL}{reviews_referer_path}?page=1"
+                    h_resp = self.session.get(full_html_url, headers=headers, timeout=self.config.request_timeout)
+                    if h_resp.status_code == 200:
+                        st = extract_zomato_preloaded_state(h_resp.text)
+                        if st:
+                            p1_data = st
             except Exception as exc:
-                logger.error("Fallback getPage reviews page 1 failed for restaurant ID %s: %s", res_id, exc)
-                return None
+                logger.error("Fallback reviews page 1 failed for restaurant ID %s: %s", res_id, exc)
 
-        if resp is None or resp.status_code != 200:
-            logger.warning(
-                "Reviews request page 1 for restaurant ID %s returned status %s: %s",
-                res_id,
-                getattr(resp, "status_code", "None"),
-                resp.text[:150] if resp else "",
-            )
-            return None
+        if p1_data is None:
+            if resp is None or resp.status_code != 200:
+                # Try direct HTML fetch as final attempt
+                if clean_url_base:
+                    try:
+                        full_html_url = f"{BASE_URL}{reviews_referer_path}?page=1"
+                        h_resp = self.session.get(full_html_url, headers=headers, timeout=self.config.request_timeout)
+                        if h_resp.status_code == 200:
+                            st = extract_zomato_preloaded_state(h_resp.text)
+                            if st:
+                                p1_data = st
+                    except Exception:
+                        pass
 
-        try:
-            p1_data = resp.json()
-        except ValueError as exc:
-            logger.error("Reviews response page 1 for restaurant ID %s was not valid JSON: %s", res_id, exc)
-            return None
+            if p1_data is None:
+                if resp is None or resp.status_code != 200:
+                    logger.warning(
+                        "Reviews request page 1 for restaurant ID %s returned status %s: %s",
+                        res_id,
+                        getattr(resp, "status_code", "None"),
+                        resp.text[:150] if resp else "",
+                    )
+                    return None
+
+                try:
+                    p1_data = resp.json()
+                except ValueError as exc:
+                    logger.error("Reviews response page 1 for restaurant ID %s was not valid JSON: %s", res_id, exc)
+                    return None
 
         # Read numberOfPages from page_data.sections.SECTION_REVIEWS
         sec_reviews = (
@@ -2645,8 +2889,8 @@ class ZomatoScraper:
         # Scrape subsequent pages (page 2 to pages_to_scrape)
         if pages_to_scrape > 1:
             for p_num in range(2, pages_to_scrape + 1):
-                if self.config.request_delay > 0:
-                    time.sleep(self.config.request_delay)
+                # Enforce 1.0s polite delay for reviews pagination
+                time.sleep(getattr(self.config, "reviews_request_delay", 1.0))
 
                 # Keep CSRF header in sync with session cookies if rotated
                 current_csrf = self.session.cookies.get("csrf")
@@ -2668,12 +2912,18 @@ class ZomatoScraper:
                         if fb_resp.status_code == 200:
                             p_json = fb_resp.json()
                         else:
-                            logger.warning(
-                                "Reviews fallback getPage %d for restaurant ID %s returned status %d",
-                                p_num,
-                                res_id,
-                                fb_resp.status_code,
-                            )
+                            # Direct HTML reviews page fetch
+                            full_html_url = f"{BASE_URL}{reviews_referer_path}?page={p_num}"
+                            h_resp = self.session.get(full_html_url, headers=headers, timeout=self.config.request_timeout)
+                            if h_resp.status_code == 200:
+                                p_json = extract_zomato_preloaded_state(h_resp.text)
+                            else:
+                                logger.warning(
+                                    "Reviews fallback for %d (ID: %s) returned status %d",
+                                    p_num,
+                                    res_id,
+                                    h_resp.status_code,
+                                )
                     except Exception as exc:
                         logger.warning("Error fetching reviews fallback getPage %d for ID %s: %s", p_num, res_id, exc)
                 else:

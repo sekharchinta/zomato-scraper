@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        zomato: {
+                            50: '#fff1f2',
+                            100: '#ffe4e6',
+                            500: '#f43f5e',
+                            600: '#e23744',
+                            700: '#cb202d',
+                            800: '#9f1239',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .code-preview {
+            background-color: #0f172a;
+            color: #38bdf8;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        /* Custom sleek scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen overflow-x-hidden antialiased">
+
+    <!-- Top Navigation (Compact Header - 56px) -->
+    <nav class="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-xs">
+        <div class="max-w-[1500px] w-full mx-auto px-4 sm:px-6">
+            <div class="flex justify-between h-14 items-center">
+                <div class="flex items-center space-x-2.5">
+                    <div class="bg-zomato-600 text-white p-2 rounded-lg shadow-sm">
+                        <i class="fa-solid fa-utensils text-base"></i>
+                    </div>
+                    <div>
+                        <span class="text-xl font-black tracking-tight text-gray-900">Zomato<span class="text-zomato-600">Scraper</span></span>
+                        <span class="hidden sm:inline-block ml-2 px-2 py-0.5 text-[11px] font-semibold bg-gray-100 text-gray-600 rounded-full border border-gray-300">Single Queue (zomato)</span>
+                    </div>
+                </div>
+
+                <!-- Live Auto-refresh & Session Action -->
+                <div class="flex items-center space-x-2.5">
+                    <span id="auto-refresh-pill" class="px-2.5 py-1 text-xs font-semibold bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200 flex items-center gap-1.5 shadow-xs">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span id="auto-refresh-label" class="hidden sm:inline">Live 4s Sync</span>
+                    </span>
+                    <button id="btn-reset-session" type="button" title="Start a fresh search and clear active task"
+                            class="text-xs font-semibold text-gray-700 hover:text-zomato-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg border border-gray-300 transition flex items-center gap-1.5 shadow-xs cursor-pointer">
+                        <i class="fa-solid fa-rotate-left text-xs"></i> New Search
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container (Fits Screen with Modern Grid) -->
+    <main class="max-w-[1500px] w-full mx-auto px-4 sm:px-6 py-3.5 space-y-3.5">
+
+        <!-- Top Metrics Cards (Compact 4-Column Grid, Zero Reviews Counter) -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-xs flex items-center justify-between">
+                <div>
+                    <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Total Batches</p>
+                    <h4 id="stat-batches" class="text-xl font-bold text-gray-900 mt-0.5">{{ stats.total_batches }}</h4>
+                </div>
+                <div class="p-2.5 bg-rose-50 text-rose-600 rounded-lg">
+                    <i class="fa-solid fa-layer-group text-base"></i>
+                </div>
+            </div>
+
+            <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-xs flex items-center justify-between">
+                <div>
+                    <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">URLs Queued</p>
+                    <h4 id="stat-urls" class="text-xl font-bold text-gray-900 mt-0.5">{{ stats.restaurants_urls }}</h4>
+                </div>
+                <div class="p-2.5 bg-blue-50 text-blue-600 rounded-lg">
+                    <i class="fa-solid fa-compass text-base"></i>
+                </div>
+            </div>
+
+            <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-xs flex items-center justify-between">
+                <div>
+                    <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Hotel Raw Data</p>
+                    <h4 id="stat-data" class="text-xl font-bold text-gray-900 mt-0.5">{{ stats.restaurants_data }}</h4>
+                </div>
+                <div class="p-2.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                    <i class="fa-solid fa-store text-base"></i>
+                </div>
+            </div>
+
+            <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-xs flex items-center justify-between">
+                <div>
+                    <p class="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Saved in PostgreSQL</p>
+                    <h4 id="stat-delivery" class="text-xl font-bold text-emerald-600 mt-0.5">{{ stats.delivery_data }}</h4>
+                </div>
+                <div class="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg">
+                    <i class="fa-solid fa-database text-base"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2-Column Responsive Workspace: Controller (Left) + Real-Time Progress (Right) -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
+
+            <!-- LEFT COLUMN: Extraction Controller Card (lg:col-span-5) -->
+            <div class="lg:col-span-5 bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+                <div class="px-4 py-2.5 bg-gradient-to-r from-zomato-600 to-rose-700 text-white flex items-center justify-between">
+                    <h2 class="text-sm font-bold flex items-center gap-1.5">
+                        <i class="fa-solid fa-magnifying-glass-location"></i> Extraction Controller
+                    </h2>
+                    <span class="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-medium">100% Live</span>
+                </div>
+
+                <div class="p-4 space-y-3.5">
+                    <!-- 1. City Input -->
+                    <div>
+                        <label for="city-input" class="block text-xs font-semibold text-gray-700 mb-1">
+                            1. Enter City Name <span class="text-zomato-600">*</span>
+                        </label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                <i class="fa-solid fa-city text-xs"></i>
+                            </span>
+                            <input type="text" id="city-input" value="Hyderabad"
+                                   placeholder="e.g. Hyderabad, Mumbai, Palakollu..."
+                                   class="w-full pl-8 pr-28 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-zomato-500 focus:border-zomato-500 transition text-xs font-medium">
+                            <button id="btn-search-city" type="button"
+                                    class="absolute right-1 top-1 bottom-1 px-3 bg-zomato-600 hover:bg-zomato-700 text-white rounded-md text-[11px] font-semibold transition flex items-center gap-1 shadow-xs cursor-pointer">
+                                <i class="fa-solid fa-search"></i> Find Localities
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 2. Location Select Dropdown -->
+                    <div>
+                        <label for="location-select" class="block text-xs font-semibold text-gray-700 mb-1">
+                            2. Choose Location / Locality <span class="text-zomato-600">*</span>
+                        </label>
+                        <div class="relative">
+                            <select id="location-select"
+                                    class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-zomato-500 focus:border-zomato-500 transition text-xs appearance-none cursor-pointer">
+                                <option value="ALL">🌐 All Locations in City</option>
+                            </select>
+                            <span class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-gray-400">
+                                <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                            </span>
+                        </div>
+                        <p id="location-help-text" class="text-[11px] text-gray-400 mt-1 truncate">Pick a locality or scrape all locations in the city.</p>
+                    </div>
+
+                    <!-- Field Customization Accordion (Compact) -->
+                    <div class="border border-gray-200 rounded-lg overflow-hidden bg-gray-50/50">
+                        <button type="button" id="toggle-fields-btn" class="w-full px-3 py-2 flex justify-between items-center text-left hover:bg-gray-100 transition cursor-pointer">
+                            <div class="flex items-center gap-1.5">
+                                <i class="fa-solid fa-sliders text-zomato-600 text-xs"></i>
+                                <span class="text-xs font-bold text-gray-800">Customize Fields</span>
+                                <span id="fields-selected-count" class="text-[10px] bg-zomato-100 text-zomato-700 px-2 py-0.5 rounded-full font-semibold">18 Selected</span>
+                            </div>
+                            <i id="fields-chevron" class="fa-solid fa-chevron-down text-gray-400 text-[10px] transition-transform duration-200"></i>
+                        </button>
+
+                        <div id="fields-content" class="p-3 border-t border-gray-200 hidden bg-white space-y-2">
+                            <div class="flex justify-between items-center pb-1.5 border-b border-gray-100">
+                                <span class="text-[11px] font-bold text-gray-500 uppercase">Available Fields ({{ all_fields|length }})</span>
+                                <div class="flex gap-1.5 text-[11px]">
+                                    <button type="button" id="btn-select-all" class="text-zomato-600 hover:underline font-semibold cursor-pointer">All</button>
+                                    <span class="text-gray-300">|</span>
+                                    <button type="button" id="btn-reset-default" class="text-gray-600 hover:underline font-semibold cursor-pointer">Default</button>
+                                    <span class="text-gray-300">|</span>
+                                    <button type="button" id="btn-deselect-all" class="text-gray-400 hover:underline cursor-pointer">Clear</button>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto pr-1" id="fields-checkbox-container">
+                                {% for f in all_fields %}
+                                <label class="flex items-center space-x-1.5 p-1 rounded-md border border-gray-200 hover:bg-gray-50 cursor-pointer text-[11px] transition">
+                                    <input type="checkbox" name="field-select" value="{{ f }}"
+                                           {% if f in default_fields %}checked{% endif %}
+                                           class="w-3.5 h-3.5 text-zomato-600 rounded border-gray-300 focus:ring-zomato-500">
+                                    <span class="font-mono text-gray-700 truncate text-[10px]">{{ f }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button (Prominent) -->
+                    <div class="pt-1">
+                        <button id="btn-start-scrape" type="button"
+                                class="w-full py-2.5 bg-zomato-600 hover:bg-zomato-700 text-white rounded-lg font-bold text-xs shadow-md hover:shadow-lg transition transform active:scale-98 flex items-center justify-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-play text-xs"></i> Start Extraction Pipeline
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN: Real-Time Progress Card (lg:col-span-7) -->
+            <div class="lg:col-span-7 bg-white rounded-xl border border-gray-200 shadow-xs p-4 space-y-3.5">
+                <!-- Header with Status, Request ID & Process Controls -->
+                <div class="flex flex-row items-center justify-between border-b border-gray-100 pb-3">
+                    <div class="space-y-0.5">
+                        <div class="flex items-center gap-2">
+                            <span id="badge-status" class="px-2.5 py-0.5 text-xs font-bold rounded-full bg-blue-100 text-blue-700 uppercase tracking-wide">
+                                Ready
+                            </span>
+                            <span id="badge-cache" class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-600 hidden">
+                                Cached
+                            </span>
+                            <h3 id="progress-title" class="text-sm font-bold text-gray-900 truncate max-w-xs">Select Location to Scrape</h3>
+                        </div>
+                        <p class="text-[11px] text-gray-500">Batch ID: <span id="label-request-id" class="font-mono text-gray-700 font-bold">-</span></p>
+                    </div>
+
+                    <div class="flex items-center gap-3">
+                        <!-- Process Controls: Terminate for currently running request -->
+                        <div id="active-process-controls" class="flex items-center gap-1.5 hidden">
+                            <button id="btn-terminate-process" type="button" title="Terminate current scraping process"
+                                    class="px-2.5 py-1 text-xs font-semibold rounded-md border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 transition flex items-center gap-1.5 shadow-xs cursor-pointer">
+                                <i class="fa-solid fa-stop text-[11px]"></i>
+                                <span>Terminate</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Progress Bar Section (CLEAN: NO REVIEWS COUNT DISPLAYED ABOVE BAR) -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between items-center text-xs font-semibold text-gray-600">
+                        <!-- Clean progress description without any reviews counter -->
+                        <span id="progress-step-desc" class="truncate pr-2">Ready to start extraction pipeline...</span>
+                        <span id="label-progress-pct" class="font-bold text-zomato-600 text-xs shrink-0">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden shadow-inner">
+                        <div id="progress-bar-fill" class="bg-gradient-to-r from-zomato-500 to-rose-600 h-full rounded-full transition-all duration-300 w-0"></div>
+                    </div>
+                </div>
+
+                <!-- 3-Step Pipeline Indicators (Reviews step completely removed from counter) -->
+                <div class="grid grid-cols-3 gap-2.5 text-xs pt-1">
+                    <div id="step-urls" class="p-2.5 rounded-lg border border-gray-200 bg-gray-50 flex items-center gap-2">
+                        <div class="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-[11px] shrink-0">1</div>
+                        <div class="min-w-0">
+                            <p class="font-bold text-gray-700 text-[11px] truncate">URLs Discovered</p>
+                            <p id="count-urls" class="text-[10px] text-gray-500">0 found</p>
+                        </div>
+                    </div>
+
+                    <div id="step-details" class="p-2.5 rounded-lg border border-gray-200 bg-gray-50 flex items-center gap-2">
+                        <div class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-[11px] shrink-0">2</div>
+                        <div class="min-w-0">
+                            <p class="font-bold text-gray-700 text-[11px] truncate">Hotel Details</p>
+                            <p id="count-details" class="text-[10px] text-gray-500">0 scraped</p>
+                        </div>
+                    </div>
+
+                    <div id="step-parse" class="p-2.5 rounded-lg border border-gray-200 bg-gray-50 flex items-center gap-2">
+                        <div class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-[11px] shrink-0">3</div>
+                        <div class="min-w-0">
+                            <p class="font-bold text-gray-700 text-[11px] truncate">PostgreSQL Sync</p>
+                            <p id="count-delivery" class="text-[10px] text-gray-500">0 records</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pipeline Notification Banner (Toast) -->
+                <div id="queue-toast" class="hidden p-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-[11px] font-medium flex items-center justify-between gap-2 transition">
+                    <div class="flex items-center gap-1.5 min-w-0 truncate">
+                        <i class="fa-solid fa-circle-info text-blue-500 shrink-0 text-xs"></i>
+                        <span id="queue-toast-msg" class="truncate"></span>
+                    </div>
+                    <button type="button" onclick="document.getElementById('queue-toast').classList.add('hidden')" class="text-blue-400 hover:text-blue-600 text-xs font-bold shrink-0 cursor-pointer">&times;</button>
+                </div>
+
+                <!-- QUEUED / NEXT REQUESTS CONTAINER (Directly under Progress Bar & Steps) -->
+                <div id="queued-requests-section" class="pt-2.5 border-t border-gray-100 hidden space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[11px] font-bold text-gray-700 uppercase tracking-wider flex items-center gap-1.5">
+                            <i class="fa-solid fa-clock-rotate-left text-amber-500"></i>
+                            Next In Pipeline / Queued (<span id="queued-requests-count" class="text-amber-600 font-black">0</span>)
+                        </span>
+                        <span class="text-[10px] text-gray-400 flex items-center gap-1">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            Single queue 'zomato' &bull; Executes sequentially
+                        </span>
+                    </div>
+
+                    <!-- Dynamic Queued Cards Container -->
+                    <div id="queued-requests-list" class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dynamic Extracted Restaurants Preview Table (Compact, Max-H Fits Screen) -->
+        <div id="data-card" class="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden hidden">
+            <div class="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-2.5">
+                <div class="flex items-center gap-2">
+                    <h3 class="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                        <i class="fa-solid fa-table text-zomato-600"></i> Extracted Restaurants Preview
+                    </h3>
+                    <span id="data-live-badge" class="px-2 py-0.5 text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded-full animate-pulse">
+                        LIVE VIEW
+                    </span>
+                    <span id="label-last-refresh" class="text-[10px] text-gray-400"></span>
+                </div>
+
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <input type="text" id="table-search" placeholder="Search in table..."
+                           class="px-2.5 py-1 text-xs bg-white border border-gray-300 rounded-md focus:ring-1 focus:ring-zomato-500 text-gray-800 w-full sm:w-48">
+                    <button id="btn-download-csv" type="button"
+                            class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-bold shadow-xs transition flex items-center gap-1 whitespace-nowrap cursor-pointer">
+                        <i class="fa-solid fa-file-csv text-xs"></i> CSV
+                    </button>
+                </div>
+            </div>
+
+            <!-- Responsive Table with Compact Heights -->
+            <div class="overflow-x-auto max-h-[360px]">
+                <table class="min-w-full divide-y divide-gray-200 text-xs">
+                    <thead class="bg-gray-100 sticky top-0 z-10" id="table-header-row">
+                        <!-- Dynamic headers -->
+                    </thead>
+                    <tbody id="table-body" class="bg-white divide-y divide-gray-200">
+                        <!-- Dynamic rows -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination Bar -->
+            <div class="px-4 py-2 bg-gray-50 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+                <div class="flex items-center space-x-2 text-gray-500 text-[11px]">
+                    <span id="label-table-count">0 records</span>
+                    <span>&bull;</span>
+                    <label for="select-page-size" class="text-gray-400">Rows:</label>
+                    <select id="select-page-size" class="bg-white border border-gray-300 rounded px-1.5 py-0.5 text-[11px] cursor-pointer">
+                        <option value="10">10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+
+                <div class="flex items-center space-x-2">
+                    <button id="btn-prev-page" type="button" disabled
+                            class="px-2.5 py-1 bg-white border border-gray-300 rounded text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-medium transition cursor-pointer">
+                        &larr; Prev
+                    </button>
+                    <span id="label-page-info" class="text-gray-600 font-semibold text-[11px]">Page 1 of 1</span>
+                    <button id="btn-next-page" type="button" disabled
+                            class="px-2.5 py-1 bg-white border border-gray-300 rounded text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-medium transition cursor-pointer">
+                        Next &rarr;
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- JavaScript Engine -->
+    <script>
+        let currentRequestId = null;
+        let pollTimer = null;
+        let currentScrapeData = [];
+        let filteredScrapeData = [];
+        let currentTableFields = [];
+        let locationSuggestions = [];
+
+        // Pagination state
+        let currentPage = 1;
+        let pageSize = 10;
+
+        // Elements
+        const cityInput = document.getElementById('city-input');
+        const btnSearchCity = document.getElementById('btn-search-city');
+        const locationSelect = document.getElementById('location-select');
+        const locationHelpText = document.getElementById('location-help-text');
+        const toggleFieldsBtn = document.getElementById('toggle-fields-btn');
+        const fieldsContent = document.getElementById('fields-content');
+        const fieldsChevron = document.getElementById('fields-chevron');
+        const btnSelectAll = document.getElementById('btn-select-all');
+        const btnResetDefault = document.getElementById('btn-reset-default');
+        const btnDeselectAll = document.getElementById('btn-deselect-all');
+        const btnStartScrape = document.getElementById('btn-start-scrape');
+        const btnResetSession = document.getElementById('btn-reset-session');
+
+        const progressCard = document.getElementById('progress-card');
+        const badgeStatus = document.getElementById('badge-status');
+        const badgeCache = document.getElementById('badge-cache');
+        const progressTitle = document.getElementById('progress-title');
+        const labelRequestId = document.getElementById('label-request-id');
+        const labelProgressPct = document.getElementById('label-progress-pct');
+        const progressBarFill = document.getElementById('progress-bar-fill');
+        const progressStepDesc = document.getElementById('progress-step-desc');
+
+        // Process Controls: Terminate
+        const activeProcessControls = document.getElementById('active-process-controls');
+        const btnTerminateProcess = document.getElementById('btn-terminate-process');
+
+        const countUrls = document.getElementById('count-urls');
+        const countDetails = document.getElementById('count-details');
+        const countDelivery = document.getElementById('count-delivery');
+
+        // Queued Requests Under Progress Bar Elements
+        const queuedRequestsSection = document.getElementById('queued-requests-section');
+        const queuedRequestsList = document.getElementById('queued-requests-list');
+        const queuedRequestsCount = document.getElementById('queued-requests-count');
+        const queueToast = document.getElementById('queue-toast');
+        const queueToastMsg = document.getElementById('queue-toast-msg');
+
+        let currentTaskStatus = null;
+        let currentProgressPct = 0;
+        let queuedRequests = [];
+
+        const dataCard = document.getElementById('data-card');
+        const tableHeaderRow = document.getElementById('table-header-row');
+        const tableBody = document.getElementById('table-body');
+        const tableSearch = document.getElementById('table-search');
+        const btnDownloadCsv = document.getElementById('btn-download-csv');
+        const labelTableCount = document.getElementById('label-table-count');
+        const labelLastRefresh = document.getElementById('label-last-refresh');
+
+        const selectPageSize = document.getElementById('select-page-size');
+        const btnPrevPage = document.getElementById('btn-prev-page');
+        const btnNextPage = document.getElementById('btn-next-page');
+        const labelPageInfo = document.getElementById('label-page-info');
+
+        // Accordion Toggle
+        toggleFieldsBtn.addEventListener('click', () => {
+            const isHidden = fieldsContent.classList.contains('hidden');
+            fieldsContent.classList.toggle('hidden');
+            fieldsChevron.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+        });
+
+        // Field Checkboxes Management
+        function getSelectedFields() {
+            const checked = document.querySelectorAll('input[name="field-select"]:checked');
+            return Array.from(checked).map(c => c.value);
+        }
+
+        btnSelectAll.addEventListener('click', () => {
+            document.querySelectorAll('input[name="field-select"]').forEach(c => c.checked = true);
+            updateFieldsCount();
+        });
+
+        btnDeselectAll.addEventListener('click', () => {
+            document.querySelectorAll('input[name="field-select"]').forEach(c => c.checked = false);
+            updateFieldsCount();
+        });
+
+        const defaultFieldsList = [
+            "restaurant_id", "name", "city", "location", "rating",
+            "votes", "cost_for_two", "cuisines", "address", "phone_numbers",
+            "timing", "page_url", "canonical_url", "total_reviews", "scraped_at"
+        ];
+
+        btnResetDefault.addEventListener('click', () => {
+            document.querySelectorAll('input[name="field-select"]').forEach(c => {
+                c.checked = defaultFieldsList.includes(c.value);
+            });
+            updateFieldsCount();
+        });
+
+        document.querySelectorAll('input[name="field-select"]').forEach(c => {
+            c.addEventListener('change', updateFieldsCount);
+        });
+
+        function updateFieldsCount() {
+            const count = getSelectedFields().length;
+            document.getElementById('fields-selected-count').textContent = `${count} Selected`;
+        }
+
+        // ==============================================================================
+        // STATIC LOCATION DROPDOWN LOGIC
+        // ==============================================================================
+        async function fetchLocations() {
+            const city = cityInput.value.trim();
+            if (!city) return;
+
+            btnSearchCity.disabled = true;
+            btnSearchCity.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Finding...';
+            locationHelpText.textContent = `Querying Zomato Location API for "${city}"...`;
+
+            try {
+                const resp = await fetch(`/api/search-locations/?query=${encodeURIComponent(city)}`);
+                const data = await resp.json();
+                if (data.status === 'success') {
+                    locationSuggestions = data.suggestions || [];
+                    locationSelect.innerHTML = '';
+
+                    // 1. Add individual localities FIRST
+                    locationSuggestions.forEach((s) => {
+                        const opt = document.createElement('option');
+                        opt.value = JSON.stringify(s);
+                        const subtitle = (s.entity_name && s.entity_name !== s.entity_title) ? ` (${s.entity_name})` : '';
+                        opt.textContent = `📍 ${s.entity_title}${subtitle}`;
+                        locationSelect.appendChild(opt);
+                    });
+
+                    // 2. Add "All Locations in City" option at the end
+                    const allOpt = document.createElement('option');
+                    allOpt.value = 'ALL';
+                    allOpt.textContent = `🌐 All Locations in ${city}`;
+                    locationSelect.appendChild(allOpt);
+
+                    if (locationSuggestions.length > 0) {
+                        locationSelect.selectedIndex = 0;
+                    } else {
+                        locationSelect.value = 'ALL';
+                    }
+
+                    locationHelpText.textContent =
+                        `Discovered ${locationSuggestions.length} localities for "${city}". Select one or choose 'All Locations'.`;
+                }
+            } catch (err) {
+                console.error("Error fetching locations:", err);
+                locationHelpText.textContent = `Could not load localities for "${city}". You can still scrape all locations.`;
+            } finally {
+                btnSearchCity.disabled = false;
+                btnSearchCity.innerHTML = '<i class="fa-solid fa-search"></i> Find Localities';
+            }
+        }
+
+        btnSearchCity.addEventListener('click', fetchLocations);
+        cityInput.addEventListener('change', fetchLocations);
+        cityInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                fetchLocations();
+            }
+        });
+
+        function stopTimers() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        }
+
+        // ==============================================================================
+        // QUEUED REQUESTS & PIPELINE QUEUE MANAGEMENT
+        // ==============================================================================
+        function showQueueToast(msg, durationMs = 6000) {
+            if (!queueToast || !queueToastMsg) return;
+            queueToastMsg.innerHTML = msg;
+            queueToast.classList.remove('hidden');
+            setTimeout(() => {
+                if (queueToast) queueToast.classList.add('hidden');
+            }, durationMs);
+        }
+
+        function renderQueuedRequestsUI() {
+            if (!queuedRequestsSection || !queuedRequestsList || !queuedRequestsCount) return;
+            queuedRequestsCount.textContent = queuedRequests.length;
+
+            if (queuedRequests.length === 0) {
+                queuedRequestsSection.classList.add('hidden');
+                queuedRequestsList.innerHTML = '';
+                return;
+            }
+
+            queuedRequestsSection.classList.remove('hidden');
+            queuedRequestsList.innerHTML = queuedRequests.map((item, idx) => {
+                const batchIdVal = item.batch_id || item.request_id || '';
+                const batchShort = batchIdVal.substring(0, 8);
+                const city = item.city || 'City';
+                const location = item.location || 'All Locations';
+                const safeCity = city.replace(/'/g, "\\'");
+                const safeLocation = location.replace(/'/g, "\\'");
+                const isNext = (idx === 0);
+                const badgeLabel = isNext ? 'NEXT REQUEST' : `QUEUED #${idx + 1}`;
+                const badgeClass = isNext ? 'bg-amber-200 text-amber-900 border border-amber-300' : 'bg-gray-100 text-gray-700 border border-gray-200';
+                const dotClass = isNext ? 'bg-amber-600 animate-pulse' : 'bg-gray-400';
+                const timeDisplay = item.time_str ? `Submitted: ${item.time_str}` : 'In Redis Queue';
+
+                return `
+                    <div class="p-2 rounded-lg border border-amber-200/80 bg-amber-50/70 flex items-center justify-between gap-2.5 transition hover:bg-amber-100/60 text-xs">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="px-2 py-0.5 text-[9px] font-black uppercase rounded-full ${badgeClass} tracking-wider shrink-0 flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full ${dotClass}"></span>
+                                ${badgeLabel}
+                            </span>
+                            <div class="truncate">
+                                <p class="font-bold text-gray-900 text-[11px] truncate flex items-center gap-1">
+                                    <span>📍 ${city}</span>
+                                    <span class="text-gray-500 font-normal truncate">(${location})</span>
+                                </p>
+                                <p class="text-[10px] text-gray-400 font-mono truncate">
+                                    Batch: ${batchShort}... &bull; ${timeDisplay}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <span class="text-[10px] font-semibold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded border border-amber-200">
+                                Waiting in Queue
+                            </span>
+                            <button type="button" onclick="cancelQueuedBatch('${batchIdVal}', '${safeCity}', '${safeLocation}')"
+                                    title="Cancel request, remove jobs from Redis queue, and delete from database"
+                                    class="px-2 py-0.5 text-[10px] font-bold text-red-600 hover:text-white hover:bg-red-600 bg-white border border-red-200 rounded transition cursor-pointer flex items-center gap-1 shadow-2xs">
+                                <i class="fa-solid fa-trash-can text-[9px]"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function mergeBackendQueuedBatches(backendList) {
+            if (!Array.isArray(backendList)) return;
+            const combined = [...queuedRequests];
+
+            backendList.forEach(b => {
+                const bId = b.batch_id || b.request_id;
+                // Exclude current active request
+                if (bId === currentRequestId) return;
+
+                const existsIdx = combined.findIndex(c => (c.batch_id === bId || c.request_id === bId));
+                if (existsIdx >= 0) {
+                    combined[existsIdx] = { ...combined[existsIdx], ...b };
+                } else {
+                    combined.push(b);
+                }
+            });
+
+            // Filter out current active request
+            queuedRequests = combined.filter(q => (q.batch_id !== currentRequestId && q.request_id !== currentRequestId));
+            renderQueuedRequestsUI();
+        }
+
+        async function switchActiveBatch(batchId, title) {
+            if (!batchId) return;
+            currentRequestId = batchId;
+            currentPage = 1;
+            labelRequestId.textContent = currentRequestId;
+            if (title) progressTitle.textContent = title;
+
+            localStorage.setItem('zomato_active_request_id', currentRequestId);
+            window.history.replaceState(null, '', `?request_id=${encodeURIComponent(currentRequestId)}`);
+
+            // Remove from queuedRequests if present
+            queuedRequests = queuedRequests.filter(q => (q.batch_id !== currentRequestId && q.request_id !== currentRequestId));
+            renderQueuedRequestsUI();
+
+            // Guarantee backend start if queued
+            try {
+                fetch(`/api/start-queued-batch/${encodeURIComponent(currentRequestId)}/`, { method: 'POST' }).catch(() => {});
+            } catch(e) {}
+
+            startAutoRefreshCycle();
+        }
+
+        function resetDashboardToReady() {
+            currentRequestId = null;
+            stopTimers();
+            localStorage.removeItem('zomato_active_request_id');
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('request_id')) {
+                window.history.replaceState(null, '', window.location.pathname);
+            }
+            labelRequestId.textContent = "-";
+            progressTitle.textContent = "Select Location to Scrape";
+            badgeStatus.className = 'px-2.5 py-0.5 text-xs font-bold rounded-full bg-blue-100 text-blue-700 uppercase tracking-wide';
+            badgeStatus.textContent = 'Ready';
+            progressBarFill.style.width = '0%';
+            labelProgressPct.textContent = '0%';
+            progressStepDesc.textContent = "Ready to start extraction pipeline...";
+            if (activeProcessControls) activeProcessControls.classList.add('hidden');
+            dataCard.classList.add('hidden');
+        }
+
+        window.cancelQueuedBatch = async function(batchId, city, location) {
+            if (!batchId) return;
+
+            const confirmMsg = `Cancel and delete this queued scrape request?\n\n` +
+                `📍 Location: ${city || 'City'} (${location || 'All'})\n` +
+                `🆔 Batch ID: ${batchId}\n\n` +
+                `This will remove the request and all its jobs from the Redis queue and permanently delete all records stored in the database.`;
+
+            if (!confirm(confirmMsg)) {
+                return;
+            }
+
+            try {
+                showQueueToast(`Deleting queued request for ${city || 'Location'}...`);
+                const resp = await fetch(`/api/delete-batch/${encodeURIComponent(batchId)}/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                const result = await resp.json();
+
+                if (resp.ok && result.status === 'success') {
+                    // Remove from local queuedRequests array
+                    queuedRequests = queuedRequests.filter(q => (q.batch_id !== batchId && q.request_id !== batchId));
+                    renderQueuedRequestsUI();
+                    showQueueToast(`✓ ${result.message || 'Queued request successfully deleted.'}`, 5000);
+                    updateCollectionStats();
+
+                    // If currently viewing this batch, switch to active batch or reset
+                    if (currentRequestId === batchId) {
+                        try {
+                            const activeResp = await fetch('/api/scrape-status/active/');
+                            if (activeResp.ok) {
+                                const activeData = await activeResp.json();
+                                if (activeData.active_running_batch && activeData.active_running_batch.batch_id !== batchId) {
+                                    const active = activeData.active_running_batch;
+                                    switchActiveBatch(active.batch_id, `${active.city} (${active.location})`);
+                                    return;
+                                }
+                            }
+                        } catch(e) {}
+
+                        // If no other running batch, reset card to ready
+                        resetDashboardToReady();
+                    }
+                } else {
+                    alert(result.message || "Failed to delete queued request.");
+                }
+            } catch (err) {
+                console.error("Error deleting queued batch:", err);
+                alert("Failed to delete queued request. Check network connection.");
+            }
+        };
+
+        // ==============================================================================
+        // START SCRAPING PIPELINE
+        // ==============================================================================
+        btnStartScrape.addEventListener('click', async () => {
+            const city = cityInput.value.trim();
+            if (!city) {
+                alert("Please enter a city name.");
+                return;
+            }
+
+            let locationVal = locationSelect ? locationSelect.value : 'ALL';
+            let locationPayload = locationVal || 'ALL';
+            if (locationVal && locationVal !== 'ALL') {
+                try {
+                    locationPayload = JSON.parse(locationVal);
+                } catch(e) {
+                    locationPayload = locationVal;
+                }
+            }
+
+            const selectedFields = getSelectedFields();
+            const forceRefresh = true;
+
+            btnStartScrape.disabled = true;
+            btnStartScrape.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Initializing...';
+
+            try {
+                const resp = await fetch('/api/start-scrape/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        city: city,
+                        location: locationPayload,
+                        selected_fields: selectedFields,
+                        force_refresh: forceRefresh,
+                        max_pages: null
+                    })
+                });
+                const result = await resp.json();
+
+                if (result.status === 'cached' || result.status === 'queued') {
+                    const newReqId = result.request_id;
+                    const newCity = result.city || city;
+                    const newLocation = result.location || (typeof locationPayload === 'string' ? locationPayload : (locationPayload.entity_title || 'Location'));
+
+                    // Check if an active request is ALREADY being processed by workers
+                    const isCurrentActive = currentRequestId && (
+                        currentTaskStatus === 'extracting_urls' ||
+                        currentTaskStatus === 'processing_restaurants' ||
+                        currentTaskStatus === 'fetching_details' ||
+                        (currentTaskStatus !== 'completed' && currentTaskStatus !== 'failed' && currentProgressPct < 100)
+                    );
+
+                    if (isCurrentActive && newReqId !== currentRequestId) {
+                        // DO NOT OVERWRITE THE CURRENTLY RUNNING PROGRESS BAR!
+                        // Add the new request to the queued list displayed UNDER the progress bar!
+                        const newQueuedItem = {
+                            request_id: newReqId,
+                            batch_id: result.batch_id || newReqId,
+                            city: newCity,
+                            location: newLocation,
+                            status: 'queued',
+                            created_at: new Date().toISOString(),
+                            time_str: new Date().toLocaleTimeString(),
+                        };
+
+                        if (!queuedRequests.some(q => (q.batch_id === newQueuedItem.batch_id || q.request_id === newQueuedItem.request_id))) {
+                            queuedRequests.push(newQueuedItem);
+                        }
+                        renderQueuedRequestsUI();
+
+                        showQueueToast(`New request queued for ${newCity} (${newLocation}). It will run sequentially after the active batch finishes.`);
+                    } else {
+                        // Nothing running right now -> Start tracking this request directly!
+                        switchActiveBatch(newReqId, `${newCity} (${newLocation})`, 0);
+                    }
+                } else {
+                    alert(result.message || "Failed to start scraping.");
+                }
+            } catch (err) {
+                console.error("Error starting scrape:", err);
+                alert("Failed to start scraping. Check server logs.");
+            } finally {
+                btnStartScrape.disabled = false;
+                btnStartScrape.innerHTML = '<i class="fa-solid fa-play text-xs"></i> Start Extraction Pipeline';
+            }
+        });
+
+        // ==============================================================================
+        // DYNAMIC AUTO-REFRESH CYCLE & AUTO-CSV DOWNLOAD
+        // ==============================================================================
+        const autoDownloadedBatches = new Set();
+
+        function triggerAutoCsvDownload(batchId) {
+            if (!batchId) return;
+            const selectedFields = getSelectedFields().join(',');
+            const exportUrl = `/api/export-csv/${encodeURIComponent(batchId)}/${selectedFields ? '?fields=' + encodeURIComponent(selectedFields) : ''}`;
+
+            showQueueToast(`📥 Request complete! Auto-downloading CSV sheet...`, 4000);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = exportUrl;
+            a.setAttribute('download', '');
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+                try {
+                    document.body.removeChild(a);
+                } catch(e) {}
+            }, 1000);
+        }
+
+        function startAutoRefreshCycle() {
+            stopTimers();
+            tickAutoRefresh();
+            pollTimer = setInterval(tickAutoRefresh, 4000);
+        }
+
+        async function tickAutoRefresh() {
+            if (!currentRequestId) return;
+
+            try {
+                const statusResp = await fetch(`/api/scrape-status/${encodeURIComponent(currentRequestId)}/`);
+
+                // ----------------------------------------------------------------------
+                // 404 NOT FOUND HANDLER:
+                // If the batch was cancelled/deleted or not found in PostgreSQL,
+                // immediately stop polling timer, clear state, and auto-pivot to active/next.
+                // ----------------------------------------------------------------------
+                if (statusResp.status === 404) {
+                    console.warn(`[Auto-Refresh] Batch ${currentRequestId} not found (404). Stopping polling and auto-recovering.`);
+                    const deadId = currentRequestId;
+                    stopTimers();
+                    currentRequestId = null;
+                    localStorage.removeItem('zomato_active_request_id');
+
+                    // Clean URL query param if it references the deleted batch
+                    const urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.get('request_id') === deadId) {
+                        window.history.replaceState(null, '', window.location.pathname);
+                    }
+
+                    // Remove dead batch from local queued list if present
+                    queuedRequests = queuedRequests.filter(q => (q.batch_id !== deadId && q.request_id !== deadId));
+                    renderQueuedRequestsUI();
+
+                    // Check if response body provided active running batch or queued batches
+                    let activeBatchToSwitch = null;
+                    try {
+                        const errData = await statusResp.json();
+                        if (errData && errData.active_running_batch) {
+                            activeBatchToSwitch = errData.active_running_batch;
+                        }
+                        if (errData && Array.isArray(errData.queued_batches)) {
+                            mergeBackendQueuedBatches(errData.queued_batches);
+                        }
+                    } catch(e) {}
+
+                    // Fallback to query /api/scrape-status/active/ if activeBatchToSwitch not in payload
+                    if (!activeBatchToSwitch) {
+                        try {
+                            const activeResp = await fetch('/api/scrape-status/active/');
+                            if (activeResp.ok) {
+                                const activeData = await activeResp.json();
+                                if (activeData.active_running_batch && activeData.active_running_batch.batch_id !== deadId) {
+                                    activeBatchToSwitch = activeData.active_running_batch;
+                                }
+                                if (Array.isArray(activeData.queued_batches)) {
+                                    mergeBackendQueuedBatches(activeData.queued_batches);
+                                }
+                            }
+                        } catch(e) {}
+                    }
+
+                    if (activeBatchToSwitch) {
+                        showQueueToast(`Task no longer active. Focusing on running batch: ${activeBatchToSwitch.city} (${activeBatchToSwitch.location})`, 4000);
+                        switchActiveBatch(activeBatchToSwitch.batch_id, `${activeBatchToSwitch.city} (${activeBatchToSwitch.location})`);
+                        return;
+                    }
+
+                    // If other queued requests are waiting, auto-advance to the next queued request
+                    if (queuedRequests.length > 0) {
+                        const nextBatch = queuedRequests.shift();
+                        renderQueuedRequestsUI();
+                        showQueueToast(`Starting next queued request: ${nextBatch.city} (${nextBatch.location})...`, 4000);
+                        switchActiveBatch(nextBatch.batch_id || nextBatch.request_id, `${nextBatch.city} (${nextBatch.location})`);
+                        return;
+                    }
+
+                    // Otherwise cleanly reset the progress card and table to Ready
+                    resetDashboardToReady();
+                    return;
+                }
+
+                if (statusResp.ok) {
+                    const data = await statusResp.json();
+                    if (data.status === 'success') {
+                        // If the currently tracked batch is terminated, completed, or queued while an active batch is executing,
+                        // immediately focus the progress bar on the actively running batch
+                        if ((data.task_status === 'terminated' || data.task_status === 'completed' || data.task_status === 'queued') &&
+                            data.active_running_batch && data.active_running_batch.batch_id !== currentRequestId) {
+                            const active = data.active_running_batch;
+                            switchActiveBatch(active.batch_id, `${active.city} (${active.location})`);
+                            return;
+                        }
+
+                        currentTaskStatus = data.task_status;
+                        currentProgressPct = data.progress;
+
+                        // Synchronize backend queued batches
+                        if (Array.isArray(data.queued_batches)) {
+                            mergeBackendQueuedBatches(data.queued_batches);
+                        }
+
+                        updateProgressUI(data);
+                        await loadScrapedData(currentRequestId);
+                        updateCollectionStats();
+
+                        if (data.task_status === 'completed' || data.progress === 100) {
+                            badgeStatus.className = 'px-2.5 py-0.5 text-xs font-bold rounded-full bg-emerald-100 text-emerald-700 uppercase tracking-wide';
+                            badgeStatus.textContent = 'COMPLETED';
+                            progressBarFill.style.width = '100%';
+                            labelProgressPct.textContent = '100%';
+
+                            // 1. AUTO-DOWNLOAD CSV SHEET: Automatically download completed request's CSV
+                            const finishedBatchId = currentRequestId;
+                            if (finishedBatchId && !autoDownloadedBatches.has(finishedBatchId)) {
+                                autoDownloadedBatches.add(finishedBatchId);
+                                triggerAutoCsvDownload(finishedBatchId);
+                            }
+
+                            // 2. ONLY AFTER AUTO-DOWNLOAD, MOVE TO THE NEXT QUEUED REQUEST
+                            if (data.active_running_batch && data.active_running_batch.batch_id !== currentRequestId) {
+                                const active = data.active_running_batch;
+                                showQueueToast(`Auto-switching to active request: ${active.city} (${active.location})...`, 4000);
+                                setTimeout(() => {
+                                    switchActiveBatch(active.batch_id, `${active.city} (${active.location})`);
+                                }, 2500);
+                            } else {
+                                const nextBatch = (data.queued_batches && data.queued_batches.length > 0)
+                                    ? data.queued_batches[0]
+                                    : (queuedRequests.length > 0 ? queuedRequests.shift() : null);
+
+                                if (nextBatch) {
+                                    queuedRequests = queuedRequests.filter(q => (q.batch_id !== nextBatch.batch_id && q.request_id !== nextBatch.request_id));
+                                    renderQueuedRequestsUI();
+                                    showQueueToast(`✓ CSV downloaded! Auto-starting next queued request: ${nextBatch.city} (${nextBatch.location})...`, 4500);
+
+                                    setTimeout(() => {
+                                        switchActiveBatch(nextBatch.batch_id || nextBatch.request_id, `${nextBatch.city} (${nextBatch.location})`, 0);
+                                    }, 2500);
+                                } else {
+                                    stopTimers();
+                                }
+                            }
+                        } else if (data.task_status === 'terminated') {
+                            badgeStatus.className = 'px-2.5 py-0.5 text-xs font-bold rounded-full bg-red-100 text-red-800 uppercase tracking-wide';
+                            badgeStatus.textContent = 'TERMINATED';
+                            progressStepDesc.textContent = data.error_message || "Extraction process terminated by user.";
+                            if (activeProcessControls) activeProcessControls.classList.add('hidden');
+
+                            if (data.active_running_batch && data.active_running_batch.batch_id !== currentRequestId) {
+                                const active = data.active_running_batch;
+                                showQueueToast(`Process terminated. Moving to active request: ${active.city} (${active.location})...`, 3500);
+                                setTimeout(() => {
+                                    switchActiveBatch(active.batch_id, `${active.city} (${active.location})`);
+                                }, 1500);
+                            } else {
+                                const nextBatch = (data.queued_batches && data.queued_batches.length > 0)
+                                    ? data.queued_batches[0]
+                                    : (queuedRequests.length > 0 ? queuedRequests.shift() : null);
+
+                                if (nextBatch) {
+                                    queuedRequests = queuedRequests.filter(q => (q.batch_id !== nextBatch.batch_id && q.request_id !== nextBatch.request_id));
+                                    renderQueuedRequestsUI();
+                                    showQueueToast(`Process terminated. Moving to next queued request: ${nextBatch.city} (${nextBatch.location})...`, 4000);
+
+                                    setTimeout(() => {
+                                        switchActiveBatch(nextBatch.batch_id || nextBatch.request_id, `${nextBatch.city} (${nextBatch.location})`, 0);
+                                    }, 1500);
+                                } else {
+                                    stopTimers();
+                                }
+                            }
+                        } else if (data.task_status === 'failed') {
+                            badgeStatus.className = 'px-2.5 py-0.5 text-xs font-bold rounded-full bg-red-100 text-red-700 uppercase tracking-wide';
+                            badgeStatus.textContent = 'FAILED';
+                            progressStepDesc.textContent = data.error_message || "Extraction task failed.";
+
+                            // Check if next queued request exists
+                            if (queuedRequests.length > 0) {
+                                const nextBatch = queuedRequests.shift();
+                                renderQueuedRequestsUI();
+                                showQueueToast(`Moving to next queued request: ${nextBatch.city} (${nextBatch.location})...`, 4000);
+
+                                setTimeout(() => {
+                                    switchActiveBatch(nextBatch.batch_id || nextBatch.request_id, `${nextBatch.city} (${nextBatch.location})`, 0);
+                                }, 3000);
+                            } else {
+                                stopTimers();
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn("Auto-refresh poll error:", err);
+            }
+        }
+
+        async function updateCollectionStats() {
+            try {
+                const resp = await fetch('/api/collection-stats/');
+                if (resp.ok) {
+                    const res = await resp.json();
+                    if (res.stats) {
+                        const elBatches = document.getElementById('stat-batches');
+                        if (elBatches) elBatches.textContent = res.stats.total_batches || 0;
+                        const elUrls = document.getElementById('stat-urls');
+                        if (elUrls) elUrls.textContent = res.stats.restaurants_urls || 0;
+                        const elData = document.getElementById('stat-data');
+                        if (elData) elData.textContent = res.stats.restaurants_data || 0;
+                        const elDelivery = document.getElementById('stat-delivery');
+                        if (elDelivery) elDelivery.textContent = res.stats.delivery_data || 0;
+                    }
+                }
+            } catch(e) {}
+        }
+
+        function updateProgressUI(data) {
+            const pct = Math.min(100, Math.max(0, parseInt(data.progress, 10) || 0));
+            progressBarFill.style.width = `${pct}%`;
+            labelProgressPct.textContent = `${pct}%`;
+
+            countUrls.textContent = `${data.total_restaurants || 0} found`;
+            countDetails.textContent = `${data.scraped_details || 0} scraped`;
+            if (countDelivery) {
+                countDelivery.textContent = `${data.parsed_delivery || 0} records`;
+            }
+
+            const statusMap = {
+                'pending': { text: 'QUEUED', class: 'bg-amber-100 text-amber-700' },
+                'queued': { text: 'QUEUED IN RQ', class: 'bg-blue-100 text-blue-700' },
+                'extracting_urls': { text: 'EXTRACTING URLS', class: 'bg-indigo-100 text-indigo-700' },
+                'processing_restaurants': { text: 'PROCESSING RESTAURANTS', class: 'bg-purple-100 text-purple-700' },
+                'fetching_details': { text: 'FETCHING DETAILS', class: 'bg-indigo-100 text-indigo-700' },
+                'terminated': { text: 'TERMINATED', class: 'bg-red-100 text-red-800' },
+                'completed': { text: 'COMPLETED', class: 'bg-emerald-100 text-emerald-700' },
+                'failed': { text: 'FAILED', class: 'bg-red-100 text-red-700' },
+            };
+            const meta = statusMap[data.task_status] || { text: (data.task_status || '').toUpperCase(), class: 'bg-gray-100 text-gray-700' };
+            badgeStatus.className = `px-2.5 py-0.5 text-xs font-bold rounded-full uppercase tracking-wide ${meta.class}`;
+            badgeStatus.textContent = meta.text;
+
+            // Toggle Process Controls (Terminate for running request)
+            if (activeProcessControls) {
+                if (['extracting_urls', 'processing_restaurants', 'fetching_details'].includes(data.task_status)) {
+                    activeProcessControls.classList.remove('hidden');
+                } else {
+                    activeProcessControls.classList.add('hidden');
+                }
+            }
+
+            // NO REVIEWS COUNT DISPLAYED ABOVE THE PROGRESS BAR!
+            const done = data.completed_jobs || data.scraped_details || 0;
+            const total = data.total_restaurants || 0;
+            progressStepDesc.textContent = `Progress: ${pct}% | Restaurants: ${done} / ${total} completed`;
+        }
+
+        // ==============================================================================
+        // DYNAMIC LOAD & PAGINATION FOR PREVIEW TABLE
+        // ==============================================================================
+        async function loadScrapedData(requestId) {
+            const selectedFields = getSelectedFields().join(',');
+            try {
+                const resp = await fetch(`/api/scrape-data/${encodeURIComponent(requestId)}/?fields=${encodeURIComponent(selectedFields)}&limit=1000`);
+                if (resp.status === 404) {
+                    return;
+                }
+                if (resp.ok) {
+                    const result = await resp.json();
+                    if (result.status === 'success' && result.data) {
+                        currentScrapeData = result.data;
+                        currentTableFields = result.fields || [];
+
+                        applyFilterAndPaginate();
+                        dataCard.classList.remove('hidden');
+                        const now = new Date();
+                        labelLastRefresh.textContent = `Refreshed: ${now.toLocaleTimeString()}`;
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading scraped data:", err);
+            }
+        }
+
+        function applyFilterAndPaginate() {
+            const query = (tableSearch.value || '').trim().toLowerCase();
+            if (!query) {
+                filteredScrapeData = currentScrapeData;
+            } else {
+                filteredScrapeData = currentScrapeData.filter(row => {
+                    return Object.values(row).some(v => String(v || '').toLowerCase().includes(query));
+                });
+            }
+            renderPaginatedTable();
+        }
+
+        function renderPaginatedTable() {
+            tableHeaderRow.innerHTML = '';
+            tableBody.innerHTML = '';
+
+            const fields = currentTableFields;
+            if (!fields || fields.length === 0) return;
+
+            // Render Table Header
+            const headerTr = document.createElement('tr');
+            fields.forEach(f => {
+                const th = document.createElement('th');
+                th.className = 'px-3 py-2 text-left font-bold text-gray-600 uppercase tracking-wider text-[10px] whitespace-nowrap bg-gray-100';
+                th.textContent = f;
+                headerTr.appendChild(th);
+            });
+            tableHeaderRow.appendChild(headerTr);
+
+            // Empty state
+            if (!filteredScrapeData || filteredScrapeData.length === 0) {
+                const emptyTr = document.createElement('tr');
+                emptyTr.innerHTML = `<td colspan="${fields.length}" class="text-center py-6 text-gray-400 italic text-xs">No matching restaurants found yet. Records appear dynamically as workers parse them.</td>`;
+                tableBody.appendChild(emptyTr);
+                labelTableCount.textContent = '0 records';
+                labelPageInfo.textContent = 'Page 0 of 0';
+                btnPrevPage.disabled = true;
+                btnNextPage.disabled = true;
+                return;
+            }
+
+            // Pagination calculation
+            const totalRecords = filteredScrapeData.length;
+            const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (currentPage < 1) currentPage = 1;
+
+            const startIndex = (currentPage - 1) * pageSize;
+            const endIndex = Math.min(startIndex + pageSize, totalRecords);
+            const pageData = filteredScrapeData.slice(startIndex, endIndex);
+
+            // Render Rows
+            pageData.forEach((row, idx) => {
+                const tr = document.createElement('tr');
+                tr.className = idx % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50/50 hover:bg-gray-100';
+
+                fields.forEach(f => {
+                    const td = document.createElement('td');
+                    td.className = 'px-3 py-2 whitespace-nowrap text-gray-700 text-xs';
+
+                    let val = row[f];
+                    if (val === null || val === undefined) {
+                        td.innerHTML = '<span class="text-gray-300">-</span>';
+                    } else if (f === 'total_reviews') {
+                        td.innerHTML = `<span class="font-bold text-zomato-600 bg-zomato-50 px-2 py-0.5 rounded-full border border-zomato-200 text-[11px]">${Number(val).toLocaleString()}</span>`;
+                    } else if (f === 'rating' || f === 'aggregate_rating' || f === 'delivery_rating') {
+                        td.innerHTML = `<span class="font-semibold text-emerald-700 text-xs"><i class="fa-solid fa-star text-[9px] text-emerald-500"></i> ${val}</span>`;
+                    } else if (f === 'reviews' && Array.isArray(val)) {
+                        td.textContent = `${val.length} review(s)`;
+                    } else if (f === 'canonical_url' && val) {
+                        td.innerHTML = `<a href="${val}" target="_blank" class="text-blue-600 hover:underline"><i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i> Link</a>`;
+                    } else {
+                        const strVal = String(val);
+                        td.textContent = strVal.length > 40 ? strVal.substring(0, 40) + '...' : strVal;
+                    }
+                    tr.appendChild(td);
+                });
+                tableBody.appendChild(tr);
+            });
+
+            // Update Pagination UI
+            labelTableCount.textContent = `Showing ${startIndex + 1}-${endIndex} of ${totalRecords}`;
+            labelPageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+            btnPrevPage.disabled = (currentPage <= 1);
+            btnNextPage.disabled = (currentPage >= totalPages);
+        }
+
+        // Pagination Event Listeners
+        btnPrevPage.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                renderPaginatedTable();
+            }
+        });
+
+        btnNextPage.addEventListener('click', () => {
+            const totalPages = Math.ceil(filteredScrapeData.length / pageSize);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderPaginatedTable();
+            }
+        });
+
+        selectPageSize.addEventListener('change', (e) => {
+            pageSize = parseInt(e.target.value, 10) || 10;
+            currentPage = 1;
+            renderPaginatedTable();
+        });
+
+        tableSearch.addEventListener('input', () => {
+            currentPage = 1;
+            applyFilterAndPaginate();
+        });
+
+        // Download CSV Action
+        btnDownloadCsv.addEventListener('click', () => {
+            if (!currentRequestId) return;
+            const selectedFields = getSelectedFields().join(',');
+            const url = `/api/export-csv/${encodeURIComponent(currentRequestId)}/?fields=${encodeURIComponent(selectedFields)}`;
+            window.location.href = url;
+        });
+
+        // Reset Session Action
+        btnResetSession.addEventListener('click', () => {
+            if (confirm("Reset current task and start a new search?")) {
+                localStorage.removeItem('zomato_active_request_id');
+                window.history.replaceState(null, '', window.location.pathname);
+                currentRequestId = null;
+                currentTaskStatus = null;
+                currentProgressPct = 0;
+                stopTimers();
+                labelRequestId.textContent = "-";
+                badgeStatus.className = 'px-2.5 py-0.5 text-xs font-bold rounded-full bg-blue-100 text-blue-700 uppercase tracking-wide';
+                badgeStatus.textContent = 'Ready';
+                progressBarFill.style.width = '0%';
+                labelProgressPct.textContent = '0%';
+                progressStepDesc.textContent = "Ready to start extraction pipeline...";
+                if (activeProcessControls) activeProcessControls.classList.add('hidden');
+                dataCard.classList.add('hidden');
+                queuedRequests = [];
+                renderQueuedRequestsUI();
+            }
+        });
+
+        // ==============================================================================
+        // PROCESS CONTROLS: TERMINATE
+        // ==============================================================================
+        if (btnTerminateProcess) {
+            btnTerminateProcess.addEventListener('click', async () => {
+                if (!currentRequestId) return;
+
+                const confirmMsg = `Terminate the currently running scraping process?\n\n` +
+                    `Batch ID: ${currentRequestId}\n\n` +
+                    `• All remaining queued jobs for this batch will be cancelled.\n` +
+                    `• Any restaurants already scraped will be RETAINED in the database and preview table.\n` +
+                    `• If a next queued request exists, the pipeline will advance to it.`;
+
+                if (!confirm(confirmMsg)) return;
+
+                btnTerminateProcess.disabled = true;
+                try {
+                    showQueueToast(`Terminating scrape process...`, 3000);
+                    const resp = await fetch(`/api/terminate-batch/${encodeURIComponent(currentRequestId)}/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                    });
+                    const res = await resp.json();
+
+                    if (resp.ok && res.status === 'success') {
+                        stopTimers();
+                        currentTaskStatus = 'terminated';
+                        badgeStatus.className = 'px-2.5 py-0.5 text-xs font-bold rounded-full uppercase tracking-wide bg-red-100 text-red-800';
+                        badgeStatus.textContent = 'TERMINATED';
+                        progressStepDesc.textContent = "Process terminated by user. Scraped records retained.";
+                        if (activeProcessControls) activeProcessControls.classList.add('hidden');
+
+                        showQueueToast(`⏹️ ${res.message || 'Scrape process terminated.'}`, 4500);
+
+                        // Reload existing scraped records for inspection/export
+                        await loadScrapedData(currentRequestId);
+                        updateCollectionStats();
+
+                        // Check if a next queued batch is waiting
+                        if (res.next_batch) {
+                            showQueueToast(`Starting next queued request: ${res.next_batch.city} (${res.next_batch.location})...`, 3000);
+                            setTimeout(() => {
+                                switchActiveBatch(res.next_batch.batch_id || res.next_batch.request_id, `${res.next_batch.city} (${res.next_batch.location})`, 0);
+                            }, 1000);
+                        } else if (queuedRequests.length > 0) {
+                            const next = queuedRequests.shift();
+                            renderQueuedRequestsUI();
+                            showQueueToast(`Advancing to next queued request: ${next.city} (${next.location})...`, 3000);
+                            setTimeout(() => {
+                                switchActiveBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`, 0);
+                            }, 1000);
+                        }
+                    } else {
+                        showQueueToast(`⚠️ ${res.message || 'Failed to terminate process.'}`, 4000);
+                    }
+                } catch (err) {
+                    showQueueToast(`Error terminating process: ${err.message}`, 4000);
+                } finally {
+                    btnTerminateProcess.disabled = false;
+                }
+            });
+        }
+
+        // ==============================================================================
+        // PAGE LOAD RE-HYDRATION & ACTIVE QUEUE INITIALIZATION
+        // ==============================================================================
+        window.addEventListener('DOMContentLoaded', async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const explicitParamId = urlParams.get('request_id');
+            const savedCity = localStorage.getItem('zomato_active_city');
+
+            if (savedCity) {
+                cityInput.value = savedCity;
+            }
+
+            // Fetch locations for active city on load
+            await fetchLocations();
+
+            // Query PostgreSQL & Redis queue status to discover active running and queued requests
+            let targetBatchId = explicitParamId;
+            let activeBatchTitle = null;
+            let activeDataLoaded = null;
+
+            try {
+                // If explicitParamId in URL, query status for it first to see if it is terminated or active
+                const queryUrl = explicitParamId ? `/api/scrape-status/${encodeURIComponent(explicitParamId)}/` : '/api/scrape-status/active/';
+                const activeResp = await fetch(queryUrl);
+                if (activeResp.ok) {
+                    const activeData = await activeResp.json();
+                    activeDataLoaded = activeData;
+                    if (activeData.status === 'success') {
+                        // Render queued requests under progress bar
+                        if (Array.isArray(activeData.queued_batches)) {
+                            mergeBackendQueuedBatches(activeData.queued_batches);
+                        }
+
+                        const isExplicitTerminated = activeData.task_status === 'terminated' || activeData.task_status === 'failed';
+                        const isExplicitQueued = explicitParamId && activeData.queued_batches &&
+                            activeData.queued_batches.some(q => q.batch_id === explicitParamId || q.request_id === explicitParamId);
+
+                        // Determine primary active batch:
+                        // If there is an actively running batch, prioritize it on the main progress bar
+                        if (activeData.active_running_batch) {
+                            if (!explicitParamId || isExplicitQueued || isExplicitTerminated) {
+                                targetBatchId = activeData.active_running_batch.batch_id;
+                                activeBatchTitle = `${activeData.active_running_batch.city} (${activeData.active_running_batch.location})`;
+                            }
+                        } else if (activeData.queued_batches && activeData.queued_batches.length > 0) {
+                            if (!explicitParamId || isExplicitTerminated) {
+                                const firstQ = activeData.queued_batches[0];
+                                targetBatchId = firstQ.batch_id || firstQ.request_id;
+                                activeBatchTitle = `${firstQ.city} (${firstQ.location})`;
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn("Could not check active batch status on load:", err);
+            }
+
+            if (!targetBatchId && !explicitParamId) {
+                // If activeData returned a valid existing batch from the DB, prefer that over stale localStorage
+                if (activeDataLoaded && activeDataLoaded.status === 'success' && activeDataLoaded.batch_id) {
+                    targetBatchId = activeDataLoaded.batch_id;
+                    activeBatchTitle = `${activeDataLoaded.city} (${activeDataLoaded.location})`;
+                } else {
+                    targetBatchId = localStorage.getItem('zomato_active_request_id');
+                }
+            }
+
+            if (targetBatchId) {
+                currentRequestId = targetBatchId;
+                labelRequestId.textContent = currentRequestId;
+                if (activeBatchTitle) {
+                    progressTitle.textContent = activeBatchTitle;
+                } else {
+                    progressTitle.textContent = `Active Task: ${currentRequestId.substring(0, 8)}...`;
+                }
+                if (explicitParamId && explicitParamId !== targetBatchId) {
+                    window.history.replaceState(null, '', `?request_id=${encodeURIComponent(targetBatchId)}`);
+                }
+                startAutoRefreshCycle();
+            }
+        });
+    </script>
+</body>
+</html>

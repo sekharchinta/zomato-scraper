@@ -30,13 +30,36 @@ RESTAURANTS_API_URL = "https://www.zomato.com/webroutes/search/home"
 RESTAURANT_DETAILS_API_URL = "https://www.zomato.com/webroutes/getPage"
 REVIEWS_API_URL = "https://www.zomato.com/webroutes/reviews/loadMore"
 
-# MongoDB Defaults
-DEFAULT_MONGO_URI = "mongodb://localhost:27017/"
-DEFAULT_MONGO_DB = "zomato"
-DEFAULT_MONGO_COLLECTION = "restaurants"
-DEFAULT_MONGO_DETAILS_COLLECTION = "restaurants_data"
-DEFAULT_MONGO_REVIEWS_COLLECTION = "reviews"
-DEFAULT_MONGO_DELIVERY_COLLECTION = "delivery_data"
+# Single Redis Queue Configuration
+SINGLE_QUEUE_NAME = "zomato"
+
+# Request Delays (0.4s for general requests, 1.0s for reviews)
+DEFAULT_REQUEST_DELAY = 0.4
+REVIEWS_REQUEST_DELAY = 1.0
+
+# PostgreSQL Defaults
+DEFAULT_POSTGRES_HOST = "127.0.0.1"
+DEFAULT_POSTGRES_PORT = 5432
+DEFAULT_POSTGRES_DB = "zomato-scraper"
+DEFAULT_POSTGRES_USER = "postgres"
+DEFAULT_POSTGRES_PASSWORD = ""
+DEFAULT_POSTGRES_SCHEMA = "zomato"
+
+# Slack Alert Defaults
+DEFAULT_SLACK_WEBHOOK_URL = ""
+DEFAULT_SLACK_BOT_TOKEN = ""
+DEFAULT_SLACK_CHANNEL = ""
+DEFAULT_SLACK_ALERT_ENABLED = True
+DEFAULT_SLACK_MIN_SUCCESS_RATE = 99.0
+
+# Legacy Mongo Placeholders (Deprecated - Project uses 100% PostgreSQL)
+DEFAULT_MONGO_URI = ""
+DEFAULT_MONGO_DB = ""
+DEFAULT_MONGO_COLLECTION = ""
+DEFAULT_MONGO_URLS_COLLECTION = ""
+DEFAULT_MONGO_DETAILS_COLLECTION = ""
+DEFAULT_MONGO_REVIEWS_COLLECTION = ""
+DEFAULT_MONGO_DELIVERY_COLLECTION = ""
 
 # Pagination defaults
 START_PAGE = 1
@@ -75,15 +98,14 @@ def load_env(env_path: Path = BASE_DIR / ".env") -> Dict[str, str]:
                 key = key.strip()
                 val = val.strip().strip("\"'")
                 env_vars[key] = val
-                if key not in os.environ:
-                    os.environ[key] = val
+                os.environ[key] = val
     return env_vars
 
 
 class Config:
     """Consolidated configuration settings."""
 
-    def __init__(self, env_path: Path = BASE_DIR / ".env") -> None:
+    def __init__(self, env_path: Path = BASE_DIR / ".env", enable_mongo: Optional[bool] = None) -> None:
         env = load_env(env_path)
 
         self.city: str = os.getenv("CITY") or env.get("CITY") or env.get("SEARCH_QUERY") or "Hyderabad"
@@ -104,7 +126,8 @@ class Config:
         self.max_pages: Optional[int] = int(raw_max) if raw_max and int(raw_max) > 0 else None
 
         self.request_timeout: int = int(os.getenv("REQUEST_TIMEOUT") or env.get("REQUEST_TIMEOUT") or 30)
-        self.request_delay: float = float(os.getenv("REQUEST_DELAY") or env.get("REQUEST_DELAY") or 1.0)
+        self.request_delay: float = float(os.getenv("REQUEST_DELAY") or env.get("REQUEST_DELAY") or DEFAULT_REQUEST_DELAY)
+        self.reviews_request_delay: float = float(os.getenv("REVIEWS_REQUEST_DELAY") or env.get("REVIEWS_REQUEST_DELAY") or REVIEWS_REQUEST_DELAY)
         raw_mrp = os.getenv("MAX_REVIEW_PAGES") or env.get("MAX_REVIEW_PAGES")
         self.max_review_pages: Optional[int] = int(raw_mrp) if raw_mrp and str(raw_mrp).isdigit() else None
 
@@ -122,27 +145,27 @@ class Config:
         self.delivery_dir: Path = Path(os.getenv("DELIVERY_DIR") or env.get("DELIVERY_DIR") or DELIVERY_DIR)
         self.delivery_dir.mkdir(parents=True, exist_ok=True)
 
-        # MongoDB configuration
-        self.mongo_uri: str = os.getenv("MONGO_URI") or env.get("MONGO_URI") or DEFAULT_MONGO_URI
-        self.mongo_db: str = os.getenv("MONGO_DB") or env.get("MONGO_DB") or DEFAULT_MONGO_DB
-        self.mongo_collection: str = os.getenv("MONGO_COLLECTION") or env.get("MONGO_COLLECTION") or DEFAULT_MONGO_COLLECTION
-        self.mongo_details_collection: str = (
-            os.getenv("MONGO_DETAILS_COLLECTION")
-            or env.get("MONGO_DETAILS_COLLECTION")
-            or DEFAULT_MONGO_DETAILS_COLLECTION
-        )
-        self.mongo_reviews_collection: str = (
-            os.getenv("MONGO_REVIEWS_COLLECTION")
-            or env.get("MONGO_REVIEWS_COLLECTION")
-            or DEFAULT_MONGO_REVIEWS_COLLECTION
-        )
-        self.mongo_delivery_collection: str = (
-            os.getenv("MONGO_DELIVERY_COLLECTION")
-            or env.get("MONGO_DELIVERY_COLLECTION")
-            or DEFAULT_MONGO_DELIVERY_COLLECTION
-        )
-        raw_enable_mongo = os.getenv("ENABLE_MONGO") or env.get("ENABLE_MONGO") or "true"
-        self.enable_mongo: bool = raw_enable_mongo.lower() not in ("false", "0", "no", "off")
+        # Single Queue Configuration
+        self.single_queue_name: str = os.getenv("SINGLE_QUEUE_NAME") or env.get("SINGLE_QUEUE_NAME") or SINGLE_QUEUE_NAME
+
+        # PostgreSQL Configuration (Active DB)
+        self.postgres_host: str = os.getenv("POSTGRES_HOST") or env.get("POSTGRES_HOST") or DEFAULT_POSTGRES_HOST
+        self.postgres_port: int = int(os.getenv("POSTGRES_PORT") or env.get("POSTGRES_PORT") or DEFAULT_POSTGRES_PORT)
+        self.postgres_db: str = os.getenv("POSTGRES_DB") or env.get("POSTGRES_DB") or DEFAULT_POSTGRES_DB
+        self.postgres_user: str = os.getenv("POSTGRES_USER") or env.get("POSTGRES_USER") or DEFAULT_POSTGRES_USER
+        self.postgres_password: str = os.getenv("POSTGRES_PASSWORD") or env.get("POSTGRES_PASSWORD") or DEFAULT_POSTGRES_PASSWORD
+        self.postgres_schema: str = os.getenv("POSTGRES_SCHEMA") or env.get("POSTGRES_SCHEMA") or DEFAULT_POSTGRES_SCHEMA
+
+        # Slack Alerts Configuration
+        self.slack_webhook_url: str = os.getenv("SLACK_WEBHOOK_URL") or env.get("SLACK_WEBHOOK_URL") or DEFAULT_SLACK_WEBHOOK_URL
+        self.slack_bot_token: str = os.getenv("SLACK_BOT_TOKEN") or env.get("SLACK_BOT_TOKEN") or DEFAULT_SLACK_BOT_TOKEN
+        self.slack_channel: str = os.getenv("SLACK_CHANNEL") or env.get("SLACK_CHANNEL") or DEFAULT_SLACK_CHANNEL
+        self.slack_alert_enabled: bool = (os.getenv("SLACK_ALERT_ENABLED") or env.get("SLACK_ALERT_ENABLED") or "true").lower() in ("true", "1", "yes")
+        raw_min_sr = os.getenv("SLACK_MIN_SUCCESS_RATE") or env.get("SLACK_MIN_SUCCESS_RATE") or DEFAULT_SLACK_MIN_SUCCESS_RATE
+        self.slack_min_success_rate: float = float(raw_min_sr)
+
+        # Legacy Mongo flag (Strictly disabled - 100% PostgreSQL)
+        self.enable_mongo: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -155,16 +178,15 @@ class Config:
             "max_review_pages": self.max_review_pages,
             "request_timeout": self.request_timeout,
             "request_delay": self.request_delay,
+            "reviews_request_delay": self.reviews_request_delay,
             "output_dir": str(self.output_dir),
             "responses_dir": str(self.responses_dir),
             "details_dir": str(self.details_dir),
             "reviews_dir": str(self.reviews_dir),
             "delivery_dir": str(self.delivery_dir),
-            "mongo_uri": self.mongo_uri,
-            "mongo_db": self.mongo_db,
-            "mongo_collection": self.mongo_collection,
-            "mongo_details_collection": self.mongo_details_collection,
-            "mongo_reviews_collection": self.mongo_reviews_collection,
-            "mongo_delivery_collection": self.mongo_delivery_collection,
-            "enable_mongo": self.enable_mongo,
+            "single_queue_name": self.single_queue_name,
+            "postgres_host": self.postgres_host,
+            "postgres_port": self.postgres_port,
+            "postgres_db": self.postgres_db,
+            "postgres_schema": self.postgres_schema,
         }
