@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#080b11] text-white antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+}
+
+/* ZeBeyond Cyber Engineering Grid Background (Deep Obsidian Black + Crisp Grid) */
+.bg-engineering-grid {
+  background-color: #080b11;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.bg-dot-pattern {
+  background-color: #080b11;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Precision Dark Scrollbars with Emerald Glow */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080b11;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #10b981;
+}
+
+/* Green Shimmer & Glow Keyframes */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shimmer {
+  animation: shimmer 2.5s infinite;
+}
+
+@keyframes pulse-glow-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+}
+
+.glow-green-pulse {
+  animation: pulse-glow-green 2.2s infinite;
+}
+
+.glow-green {
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.35);
+}
+
+.glow-green-sm {
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
+}
+
+/* High-tech pill */
+.tech-pill {
+  @apply font-mono text-[10px] tracking-wider uppercase font-semibold;
+}

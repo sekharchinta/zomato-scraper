@@ -3,7 +3,7 @@
 set -e
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd )"
-cd "$DIR"
+cd "$DIR/backend"
 
 PYTHON="$DIR/venv/bin/python"
 if [ ! -f "$PYTHON" ]; then
@@ -22,5 +22,5 @@ if [[ "$1" =~ ^[0-9]+$ ]]; then
     shift
     exec "$PYTHON" manage.py run_workers --workers "$WORKERS" "$@"
 else
-    exec "$PYTHON" manage.py run_workers "$@"
+    exec "$PYTHON" manage.py run_workers --workers 6 "$@"
 fi

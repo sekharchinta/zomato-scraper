@@ -42,12 +42,22 @@ output/
 output_details/
 output_reviews/
 output_delivery/
+backend/output/
+backend/output_details/
+backend/output_reviews/
+backend/output_delivery/
 
 # Logs and databases
 *.log
 *.sqlite3
 *.lock
 .worker_manager.lock
+
+# Frontend dependencies & cache
+node_modules/
+frontend/node_modules/
+.vite/
+frontend/.vite/
 
 # IDE / Editor
 .idea/

@@ -197,23 +197,7 @@ Copy the template and configure your local PostgreSQL and Redis credentials:
 ```bash
 cp .env.example .env
 ```
-Edit `.env`:
-```ini
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_DB=1
-SINGLE_QUEUE_NAME=zomato
 
-POSTGRES_HOST=127.0.0.1
-POSTGRES_PORT=5432
-POSTGRES_DB=zomato-scraper
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_postgres_password
-POSTGRES_SCHEMA=zomato
-
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-SLACK_ALERT_ENABLED=true
-SLACK_MIN_SUCCESS_RATE=99.0
 ```
 
 ### 3. Setup PostgreSQL Database & Schema
@@ -235,7 +219,7 @@ python manage.py migrate
 
 ## Running the Platform
 
-Run the following commands in 3 separate terminal tabs:
+Run the following commands in separate terminal tabs:
 
 ```
 ┌─────────────────────────────────┬─────────────────────────────────┬─────────────────────────────────┐
@@ -248,9 +232,51 @@ Run the following commands in 3 separate terminal tabs:
 └─────────────────────────────────┴─────────────────────────────────┴─────────────────────────────────┘
 ```
 
-- **Dashboard**: `http://127.0.0.1:8000`
+- **React Dashboard (Production)**: `http://127.0.0.1:8000` (Served directly by Django)
 - **Admin Panel**: `http://127.0.0.1:8000/admin`
 - **RQ Monitor**: `http://127.0.0.1:9181`
+
+### Repository Structure
+
+```
+zomato/
+├── backend/                  # Django API, PostgreSQL ORM, tasks, scraper engine, tests
+│   ├── manage.py
+│   ├── config.py
+│   ├── scraper.py
+│   ├── scraper_app/
+│   ├── zomato_scraper/
+│   └── tests/
+├── frontend/                 # React.js SPA (Vite, Tailwind CSS, Lucide React)
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── src/
+│   └── dist/                 # Production compiled bundle
+├── commands/                 # Unified lifecycle & execution scripts
+│   ├── run_server.sh
+│   ├── run_workers.sh
+│   ├── run_rq_dashboard.sh
+│   ├── run_frontend.sh
+│   ├── build_frontend.sh
+│   ├── migrate.sh
+│   └── run_tests.sh
+├── .env                      # Global environment configuration
+└── requirements.txt          # Root & backend Python requirements link
+```
+
+### Frontend Development (Vite + React.js)
+
+To run the React frontend in development mode with Hot Module Replacement (HMR):
+```bash
+./commands/run_frontend.sh
+# Accessible at http://localhost:5173 with proxy to Django API at http://127.0.0.1:8000
+```
+
+To build production React assets:
+```bash
+./commands/build_frontend.sh
+# Outputs optimized bundle to frontend/dist/ for direct Django serving
+```
 
 ---
 
