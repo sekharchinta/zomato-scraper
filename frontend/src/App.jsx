@@ -5,6 +5,7 @@ import { ExtractionController } from './components/ExtractionController';
 import { ProgressTracker } from './components/ProgressTracker';
 import { DataTable } from './components/DataTable';
 import { ModalPopup } from './components/ModalPopup';
+import { LoginPage } from './components/LoginPage';
 import { useCollectionStats } from './hooks/useCollectionStats';
 import { useLocationSearch } from './hooks/useLocationSearch';
 import { useScrapeManager } from './hooks/useScrapeManager';
@@ -43,6 +44,24 @@ export default function App() {
     fetchCompletedBatches,
   } = useScrapeManager({ onStatsRefresh: refreshStats });
 
+  // 1. Initial Session Verification Screen
+  if (auth.loading) {
+    return (
+      <div className="min-h-screen bg-[#070a10] bg-engineering-grid flex items-center justify-center selection:bg-emerald-500 selection:text-black">
+        <div className="flex flex-col items-center gap-3.5 text-zinc-400 font-mono text-xs">
+          <div className="w-9 h-9 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+          <span className="tracking-wider text-zinc-300">VERIFYING USER SESSION...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Authentication Gate: Require Verified Google Sign-In before displaying dashboard
+  if (!auth.isAuthenticated || !auth.user) {
+    return <LoginPage auth={auth} />;
+  }
+
+  // 3. Authenticated User Dashboard
   return (
     <div className="min-h-screen bg-engineering-grid text-white font-sans antialiased selection:bg-emerald-500 selection:text-black">
       {/* High-Precision Top Navigation Bar with Zomato Restaurant Extraction Theme */}
