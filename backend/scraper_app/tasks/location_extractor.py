@@ -19,6 +19,7 @@ logger = logging.getLogger("location_extractor")
 def extract_locations_and_store(
     query: str,
     request_id: Optional[Any] = None,
+    user: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extracts all location suggestions and coordinates for a user-entered location query.
@@ -105,6 +106,7 @@ def extract_locations_and_store(
         # All locations in this user query share the SAME unified batch requestid
         record = LatLongData(
             requestid=req_uuid,
+            user=user,
             search_query=clean_query,
             city=parent_city,
             entity_id=entity_id,

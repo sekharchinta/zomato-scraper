@@ -224,6 +224,14 @@ class LatLongData(models.Model):
     """
     id = models.BigAutoField(primary_key=True)
     requestid = models.UUIDField(db_index=True, null=True, blank=True, default=uuid.uuid4, db_column="requestid")
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="location_searches",
+        help_text="User who initiated this location search",
+    )
     search_query = models.CharField(max_length=255, db_index=True)
     city = models.CharField(max_length=120, db_index=True)
     entity_id = models.CharField(max_length=100, blank=True, default="")

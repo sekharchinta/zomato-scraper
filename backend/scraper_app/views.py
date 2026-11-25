@@ -93,8 +93,9 @@ def search_locations_api(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"status": "error", "message": "Query parameter is required"}, status=400)
 
     req_id = request.GET.get("request_id", "").strip() or str(uuid.uuid4())
+    user = request.user if getattr(request, "user", None) and request.user.is_authenticated else None
     from scraper_app.tasks.location_extractor import extract_locations_and_store
-    formatted_suggestions = extract_locations_and_store(query, request_id=req_id)
+    formatted_suggestions = extract_locations_and_store(query, request_id=req_id, user=user)
 
     first_lat = formatted_suggestions[0].get("latitude") if formatted_suggestions else None
     first_lon = formatted_suggestions[0].get("longitude") if formatted_suggestions else None
@@ -125,6 +126,7 @@ def search_locations_api(request: HttpRequest) -> JsonResponse:
     try:
         LatLongData.objects.create(
             requestid=uuid.UUID(req_id),
+            user=user,
             search_query=query,
             city=query.title(),
             entity_id="0",

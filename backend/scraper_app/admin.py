@@ -27,6 +27,7 @@ admin.site.index_title = "Data Extraction, Batches & Job Monitoring"
 class LatLongDataAdmin(admin.ModelAdmin):
     list_display = (
         "batch_id",
+        "user_text",
         "search_query",
         "city",
         "entity_title",
@@ -35,7 +36,7 @@ class LatLongDataAdmin(admin.ModelAdmin):
         "created_at",
     )
     list_filter = ("city", "entity_type", "created_at")
-    search_fields = ("requestid", "search_query", "city", "entity_title", "entity_name")
+    search_fields = ("requestid", "search_query", "city", "entity_title", "entity_name", "user__email", "user__username")
     readonly_fields = ("requestid", "created_at", "updated_at")
     ordering = ("-created_at",)
     list_per_page = 50
@@ -44,6 +45,13 @@ class LatLongDataAdmin(admin.ModelAdmin):
         return str(obj.requestid)[:8] if obj.requestid else "-"
     batch_id.short_description = "Batch ID"
     batch_id.admin_order_field = "requestid"
+
+    def user_text(self, obj: LatLongData) -> str:
+        if not obj.user:
+            return "Anonymous / System"
+        return obj.user.email or obj.user.username
+    user_text.short_description = "User"
+    user_text.admin_order_field = "user__email"
 
 
 # ==============================================================================

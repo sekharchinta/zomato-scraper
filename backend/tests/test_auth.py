@@ -6,7 +6,7 @@ Unit tests for Google OAuth 2.0 authentication endpoints.
 from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase, Client
-from scraper_app.models import UserProfile
+from scraper_app.models import LatLongData, UserProfile
 
 
 class GoogleAuthTestCase(TestCase):
@@ -83,3 +83,32 @@ class GoogleAuthTestCase(TestCase):
         # Verify /api/auth/me/ is now unauthenticated
         me_after_logout = self.client.get("/api/auth/me/")
         self.assertFalse(me_after_logout.json().get("authenticated"))
+
+    @patch("scraper_app.tasks.location_extractor.ZomatoScraper")
+    def test_authenticated_search_locations_binds_user(self, mock_scraper_cls):
+        """Tests that location searches performed by an authenticated user attach user to LatLongData."""
+        mock_scraper = mock_scraper_cls.return_value
+        mock_scraper.get_location_suggestions.return_value = [
+            {
+                "entity_id": "111",
+                "entity_type": "subzone",
+                "entity_title": "Indiranagar",
+                "entity_name": "Indiranagar, Bengaluru",
+                "latitude": 12.9716,
+                "longitude": 77.5946,
+            }
+        ]
+
+        # Create and log in a user
+        user = User.objects.create(username="geo_user", email="geo_user@example.com")
+        self.client.force_login(user)
+
+        resp = self.client.get("/api/search-locations/?query=Indiranagar")
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify latlong_data records have user assigned
+        stored_records = LatLongData.objects.filter(search_query="Indiranagar")
+        self.assertTrue(stored_records.exists())
+        for rec in stored_records:
+            self.assertEqual(rec.user, user)
+
