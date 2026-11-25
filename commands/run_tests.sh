@@ -17,7 +17,7 @@ fi
 echo "================================================================="
 echo "  [1/2] Running Django PostgreSQL & Single Queue Test Suite"
 echo "================================================================="
-"$PYTHON" manage.py test
+"$PYTHON" manage.py test tests.test_django_scraper tests.test_auth
 
 echo ""
 echo "================================================================="

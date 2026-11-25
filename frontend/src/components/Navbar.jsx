@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { RotateCcw, Bell, Loader2 } from 'lucide-react';
+import { RotateCcw, Bell, Loader2, LogOut, User as UserIcon } from 'lucide-react';
 
-export function Navbar({ onResetSession, onTestSlack, isTestingSlack }) {
+export function Navbar({ onResetSession, onTestSlack, isTestingSlack, auth }) {
   const [testing, setTesting] = useState(false);
 
   const handleTestSlack = async () => {
@@ -97,6 +97,46 @@ export function Navbar({ onResetSession, onTestSlack, isTestingSlack }) {
               <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
               <span>New Search</span>
             </button>
+
+            {/* Google Authentication Control */}
+            {auth && (
+              <div className="flex items-center pl-2 border-l border-zinc-700">
+                {auth.loading ? (
+                  <div className="h-8 w-24 rounded-full bg-zinc-800/80 animate-pulse border border-zinc-700" />
+                ) : auth.isAuthenticated && auth.user ? (
+                  <div className="flex items-center space-x-2 bg-[#0e1422] border-2 border-zinc-700 rounded-full pl-1.5 pr-2.5 py-1">
+                    {auth.user.avatar ? (
+                      <img
+                        src={auth.user.avatar}
+                        alt={auth.user.name || 'User'}
+                        className="w-6 h-6 rounded-full border border-emerald-500/50 object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-emerald-900 border border-emerald-500/50 flex items-center justify-center text-[11px] font-bold text-emerald-300">
+                        {(auth.user.name || auth.user.email || 'U')[0].toUpperCase()}
+                      </div>
+                    )}
+                    <span className="text-xs font-medium text-zinc-200 max-w-[110px] truncate" title={auth.user.email}>
+                      {auth.user.name || auth.user.email}
+                    </span>
+                    <button
+                      onClick={auth.logout}
+                      type="button"
+                      title="Sign Out"
+                      className="text-zinc-400 hover:text-rose-400 transition-colors p-0.5 rounded hover:bg-zinc-800"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    ref={(el) => auth.renderGoogleButton(el)}
+                    className="h-8 flex items-center min-w-[130px]"
+                  />
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

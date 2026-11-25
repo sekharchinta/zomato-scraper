@@ -275,6 +275,7 @@ def dispatch_scrape_request(
     sync_discovery: bool = False,
     clear_queue: bool = False,
     request_id: Optional[Any] = None,
+    user: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Main Producer Entrypoint (100% Live Scraping):
@@ -356,6 +357,7 @@ def dispatch_scrape_request(
     batch = ScrapeBatch.objects.create(
         batch_id=batch_uuid,
         request_id=batch_id_str,
+        user=user,
         location_key=location_key,
         city=city_str or "Direct URL",
         location=location_title if not rest_url_str else "Direct Restaurant URL",

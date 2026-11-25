@@ -200,6 +200,7 @@ def start_scrape_api(request: HttpRequest) -> JsonResponse:
         restaurant_url=restaurant_url,
         clear_queue=clear_queue_val,
         request_id=request_id_val,
+        user=request.user if getattr(request, "user", None) and request.user.is_authenticated else None,
     )
     status_code = result.pop("status_code", 200)
     return JsonResponse(result, status=status_code)

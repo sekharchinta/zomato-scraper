@@ -10,7 +10,7 @@ Provides clean, standard, 100% plain-text display without colors or decorative m
 import json
 from django.contrib import admin
 
-from scraper_app.models import LatLongData, RestaurantJob, RestaurantRecord, ScrapeBatch
+from scraper_app.models import LatLongData, RestaurantJob, RestaurantRecord, ScrapeBatch, UserProfile
 from scraper_app.views import get_batch_elapsed_seconds
 
 
@@ -53,6 +53,7 @@ class LatLongDataAdmin(admin.ModelAdmin):
 class ScrapeBatchAdmin(admin.ModelAdmin):
     list_display = (
         "requestid",
+        "user_text",
         "location_text",
         "status_text",
         "jobs_progress",
@@ -61,7 +62,7 @@ class ScrapeBatchAdmin(admin.ModelAdmin):
         "completed_at_text",
     )
     list_filter = ("status", "city", "created_at")
-    search_fields = ("requestid", "city", "location", "location_key")
+    search_fields = ("requestid", "city", "location", "location_key", "user__email", "user__username")
     readonly_fields = (
         "requestid",
         "created_at",
@@ -75,7 +76,7 @@ class ScrapeBatchAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Batch Identification", {
-            "fields": ("requestid", "city", "location", "status")
+            "fields": ("requestid", "user", "city", "location", "status")
         }),
         ("Jobs & Extraction Progress", {
             "fields": ("jobs_progress", "progress", "total_restaurants", "completed_jobs", "failed_jobs", "scraped_details", "scraped_reviews")
@@ -93,6 +94,13 @@ class ScrapeBatchAdmin(admin.ModelAdmin):
         return str(obj.requestid)[:8]
     batch_id_short.short_description = "Batch ID"
     batch_id_short.admin_order_field = "requestid"
+
+    def user_text(self, obj: ScrapeBatch) -> str:
+        if not obj.user:
+            return "System / Anonymous"
+        return obj.user.email or obj.user.username
+    user_text.short_description = "User"
+    user_text.admin_order_field = "user__email"
 
     def location_text(self, obj: ScrapeBatch) -> str:
         city = (obj.city or "").title()
@@ -305,3 +313,57 @@ class RestaurantJobAdmin(admin.ModelAdmin):
         return obj.created_at.strftime("%b %d, %H:%M")
     created_at_text.short_description = "Created"
     created_at_text.admin_order_field = "created_at"
+
+
+# ==============================================================================
+# 4. USER PROFILES ADMIN (UserProfile)
+# ==============================================================================
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = (
+        "user_email",
+        "user_name",
+        "google_id_short",
+        "email_verified",
+        "created_at_text",
+    )
+    list_filter = ("email_verified", "created_at")
+    search_fields = ("user__email", "user__first_name", "user__last_name", "google_id")
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("-created_at",)
+    list_per_page = 25
+
+    fieldsets = (
+        ("User Identification", {
+            "fields": ("user", "google_id", "email_verified")
+        }),
+        ("Profile Details", {
+            "fields": ("avatar_url",)
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at")
+        }),
+    )
+
+    def user_email(self, obj: UserProfile) -> str:
+        return obj.user.email or obj.user.username
+    user_email.short_description = "Email"
+    user_email.admin_order_field = "user__email"
+
+    def user_name(self, obj: UserProfile) -> str:
+        name = f"{obj.user.first_name} {obj.user.last_name}".strip()
+        return name if name else "-"
+    user_name.short_description = "Name"
+    user_name.admin_order_field = "user__first_name"
+
+    def google_id_short(self, obj: UserProfile) -> str:
+        return str(obj.google_id)[:12] + "..." if obj.google_id and len(obj.google_id) > 12 else str(obj.google_id)
+    google_id_short.short_description = "Google ID"
+
+    def created_at_text(self, obj: UserProfile) -> str:
+        if not obj.created_at:
+            return "-"
+        return obj.created_at.strftime("%b %d, %Y %H:%M")
+    created_at_text.short_description = "Joined"
+    created_at_text.admin_order_field = "created_at"
+

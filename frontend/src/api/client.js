@@ -6,6 +6,7 @@ const API_BASE = '';
 
 async function fetchJson(url, options = {}) {
   const resp = await fetch(url, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,
@@ -171,5 +172,38 @@ export const api = {
     }, 1500);
 
     return filename;
+  },
+
+  /**
+   * Retrieves Google OAuth Client configuration (client_id).
+   */
+  async getGoogleAuthConfig() {
+    return fetchJson(`${API_BASE}/api/auth/google/config/`);
+  },
+
+  /**
+   * Submits Google ID Token credential to backend for validation and session creation.
+   */
+  async sendGoogleCredential(credential) {
+    return fetchJson(`${API_BASE}/api/auth/google/`, {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    });
+  },
+
+  /**
+   * Fetches currently authenticated user details.
+   */
+  async getCurrentUser() {
+    return fetchJson(`${API_BASE}/api/auth/me/`);
+  },
+
+  /**
+   * Terminates active session.
+   */
+  async logout() {
+    return fetchJson(`${API_BASE}/api/auth/logout/`, {
+      method: 'POST',
+    });
   },
 };

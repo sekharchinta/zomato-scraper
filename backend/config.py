@@ -53,6 +53,11 @@ DEFAULT_SLACK_CHANNEL = ""
 DEFAULT_SLACK_ALERT_ENABLED = True
 DEFAULT_SLACK_MIN_SUCCESS_RATE = 99.0
 
+# Google OAuth 2.0 Defaults
+DEFAULT_GOOGLE_CLIENT_ID = ""
+DEFAULT_GOOGLE_CLIENT_SECRET = ""
+DEFAULT_GOOGLE_PROJECT_ID = ""
+
 # Legacy MongoDB Fallback Constants (Stubbed for backwards compatibility - 100% PostgreSQL schema 'zomato')
 DEFAULT_MONGO_URI = "mongodb://localhost:27017"
 DEFAULT_MONGO_DB = "zomato"
@@ -169,6 +174,11 @@ class Config:
         self.slack_alert_enabled: bool = (os.getenv("SLACK_ALERT_ENABLED") or env.get("SLACK_ALERT_ENABLED") or "true").lower() in ("true", "1", "yes")
         raw_min_sr = os.getenv("SLACK_MIN_SUCCESS_RATE") or env.get("SLACK_MIN_SUCCESS_RATE") or DEFAULT_SLACK_MIN_SUCCESS_RATE
         self.slack_min_success_rate: float = float(raw_min_sr)
+
+        # Google OAuth 2.0 Configuration
+        self.google_client_id: str = os.getenv("GOOGLE_CLIENT_ID") or env.get("GOOGLE_CLIENT_ID") or DEFAULT_GOOGLE_CLIENT_ID
+        self.google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET") or env.get("GOOGLE_CLIENT_SECRET") or DEFAULT_GOOGLE_CLIENT_SECRET
+        self.google_project_id: str = os.getenv("GOOGLE_PROJECT_ID") or env.get("GOOGLE_PROJECT_ID") or DEFAULT_GOOGLE_PROJECT_ID
 
         # Legacy Mongo flag (Strictly disabled - 100% PostgreSQL)
         self.enable_mongo: bool = False

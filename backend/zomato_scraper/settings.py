@@ -158,3 +158,21 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 TEST_RUNNER = 'zomato_scraper.test_runner.PostgresSchemaTestRunner'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Google OAuth 2.0 Credentials
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_PROJECT_ID = os.getenv('GOOGLE_PROJECT_ID', '')
+
+# Session & Cookie Security for Cross-Origin / Single SPA
+SESSION_COOKIE_AGE = 86400 * 30  # 30 days
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+]

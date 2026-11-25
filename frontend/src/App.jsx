@@ -8,8 +8,10 @@ import { ModalPopup } from './components/ModalPopup';
 import { useCollectionStats } from './hooks/useCollectionStats';
 import { useLocationSearch } from './hooks/useLocationSearch';
 import { useScrapeManager } from './hooks/useScrapeManager';
+import { useAuth } from './hooks/useAuth';
 
 export default function App() {
+  const auth = useAuth();
   const { stats, refreshStats } = useCollectionStats();
   const { suggestions, loading: isSearchingLocations, searchLocations } = useLocationSearch();
 
@@ -47,6 +49,7 @@ export default function App() {
       <Navbar
         onResetSession={resetSession}
         onTestSlack={testSlackNotification}
+        auth={auth}
       />
 
       {/* Main Engineering Container */}

@@ -8,6 +8,7 @@ are persisted into PostgreSQL tables in the 'zomato' schema.
 import re
 import uuid
 from typing import Any, Dict, List, Optional
+from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
@@ -91,6 +92,14 @@ class ScrapeBatch(models.Model):
     ]
 
     requestid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, db_index=True, db_column="requestid")
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="batches",
+        help_text="Authenticated user who launched this batch",
+    )
     city = models.CharField(max_length=120)
     location = models.CharField(max_length=255)
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default="queued")
@@ -563,3 +572,26 @@ class RestaurantRecord(models.Model):
             return results
         except Exception:
             return []
+
+
+class UserProfile(models.Model):
+    """
+    Extends Django core User with Google OAuth 2.0 profile metadata.
+    Stored in PostgreSQL schema 'zomato' table 'zomato_user_profiles'.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    google_id = models.CharField(max_length=255, unique=True, db_index=True, help_text="Google unique subject ID (sub)")
+    avatar_url = models.URLField(max_length=1000, blank=True, default="", help_text="User Google avatar picture URL")
+    email_verified = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "zomato_user_profiles"
+        ordering = ["-created_at"]
+        verbose_name = "User Profile"
+        verbose_name_plural = "User Profiles"
+
+    def __str__(self) -> str:
+        return f"{self.user.email} ({self.google_id})"
+
