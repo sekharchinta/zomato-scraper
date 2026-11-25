@@ -211,13 +211,15 @@ def process_restaurant_pipeline_job(
         return {"status": "cancelled", "message": "Batch was deleted or cancelled."}
 
     if not job_record:
-        # Auto-heal missing job record in PostgreSQL
-        job_record = RestaurantJob.objects.create(
-            batch=batch,
-            name=name or "Restaurant",
-            page_url=restaurant_url,
-            stage="pending",
-        )
+        # Check if an existing job record exists for this batch and URL before creating
+        job_record = RestaurantJob.objects.filter(batch=batch, page_url=restaurant_url).first()
+        if not job_record:
+            job_record = RestaurantJob.objects.create(
+                batch=batch,
+                name=name or "Restaurant",
+                page_url=restaurant_url,
+                stage="pending",
+            )
 
     # Respect user pause / termination
     if not check_and_wait_if_paused(batch.requestid, f"Pipeline execution for {restaurant_url}"):
@@ -314,31 +316,53 @@ def process_restaurant_pipeline_job(
     if final_doc_name.strip().lower() == "restaurant" and job_record.name and job_record.name.lower() != "restaurant":
         final_doc_name = job_record.name
 
-    # Upsert into PostgreSQL 'zomato_restaurants' table
+    # Upsert into PostgreSQL 'zomato_restaurants' table safely with duplicate consolidation
+    record_defaults = {
+        "restaurant_id": restaurant_id,
+        "name": final_doc_name,
+        "city": city,
+        "location": location,
+        "location_key": location_key,
+        "address": delivery_doc.get("address", ""),
+        "phone_number": delivery_doc.get("phone_numbers", ""),
+        "timing": delivery_doc.get("timing", ""),
+        "rating": delivery_doc.get("rating", ""),
+        "votes": delivery_doc.get("votes") or 0,
+        "cuisines": delivery_doc.get("cuisines", ""),
+        "costof_two": delivery_doc.get("average_cost_for_two") or delivery_doc.get("cost_for_two", ""),
+        "canonical_url": delivery_doc.get("canonical_url", ""),
+        "total_reviews": len(reviews_list),
+        "reviews": reviews_list,
+        "raw_data": raw_combined_payload,
+        "delivery_document": delivery_doc,
+    }
+
     with transaction.atomic():
-        restaurant_record, _ = RestaurantRecord.objects.update_or_create(
-            requestid=batch,
-            pageurl=clean_path,
-            defaults={
-                "restaurant_id": restaurant_id,
-                "name": final_doc_name,
-                "city": city,
-                "location": location,
-                "location_key": location_key,
-                "address": delivery_doc.get("address", ""),
-                "phone_number": delivery_doc.get("phone_numbers", ""),
-                "timing": delivery_doc.get("timing", ""),
-                "rating": delivery_doc.get("rating", ""),
-                "votes": delivery_doc.get("votes") or 0,
-                "cuisines": delivery_doc.get("cuisines", ""),
-                "costof_two": delivery_doc.get("average_cost_for_two") or delivery_doc.get("cost_for_two", ""),
-                "canonical_url": delivery_doc.get("canonical_url", ""),
-                "total_reviews": len(reviews_list),
-                "reviews": reviews_list,
-                "raw_data": raw_combined_payload,
-                "delivery_document": delivery_doc,
-            },
+        existing_records = list(
+            RestaurantRecord.objects.select_for_update()
+            .filter(requestid=batch, pageurl=clean_path)
+            .order_by("id")
         )
+        if existing_records:
+            restaurant_record = existing_records[0]
+            if len(existing_records) > 1:
+                duplicate_ids = [r.id for r in existing_records[1:]]
+                RestaurantRecord.objects.filter(id__in=duplicate_ids).delete()
+                logger.warning(
+                    "[RESTAURANT_EXTRACTOR] Consolidated %d duplicate records for %s in batch %s",
+                    len(existing_records),
+                    clean_path,
+                    batch_id,
+                )
+            for field, value in record_defaults.items():
+                setattr(restaurant_record, field, value)
+            restaurant_record.save()
+        else:
+            restaurant_record = RestaurantRecord.objects.create(
+                requestid=batch,
+                pageurl=clean_path,
+                **record_defaults,
+            )
 
     # 4. Mark Job Completed and Update Batch Progress
     job_record.stage = "completed"

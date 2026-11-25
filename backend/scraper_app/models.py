@@ -382,6 +382,12 @@ class RestaurantRecord(models.Model):
         ordering = ["-updated_at"]
         verbose_name = "Extracted Job"
         verbose_name_plural = "Jobs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["requestid", "pageurl"],
+                name="unique_batch_restaurant_pageurl",
+            )
+        ]
 
     # Backward compatibility properties
     @property

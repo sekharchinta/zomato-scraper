@@ -213,10 +213,12 @@ def extract_urls_from_latlongs(
                             sections = pages["current"].get("sections", {})
 
                         res_list = sections.get("SECTION_SEARCH_RESULT", []) if isinstance(sections, dict) else []
+                        seen_batch_urls = set(RestaurantJob.objects.filter(batch=batch).values_list("page_url", flat=True))
                         for item in res_list:
                             url = extract_restaurant_page_url(item)
-                            if not url:
+                            if not url or url in seen_batch_urls:
                                 continue
+                            seen_batch_urls.add(url)
                             res_obj = item.get("restaurant", {}) if isinstance(item, dict) else {}
                             name = res_obj.get("name") or item.get("info", {}).get("name") or "Restaurant"
                             res_id = res_obj.get("id") or item.get("info", {}).get("resId")
@@ -298,6 +300,7 @@ def _scrape_location_coordinates(
     search_metadata: Optional[Dict[str, Any]] = None
     discovered_count = 0
     last_page_urls: List[str] = []
+    seen_batch_urls: set = set(RestaurantJob.objects.filter(batch=batch).values_list("page_url", flat=True))
 
     while True:
         if not pause_check_func(batch.batch_id, f"URL extraction page {page} for {loc_name}"):
@@ -368,6 +371,12 @@ def _scrape_location_coordinates(
                 continue
 
             current_page_urls.append(url)
+
+            # Prevent duplicate jobs within the same batch (e.g. sponsored ads repeated across pages)
+            if url in seen_batch_urls:
+                continue
+            seen_batch_urls.add(url)
+
             res_obj = item.get("info", {}) or item.get("restaurant", {})
             name = res_obj.get("name") or "Restaurant"
             res_id = res_obj.get("resId") or res_obj.get("id")

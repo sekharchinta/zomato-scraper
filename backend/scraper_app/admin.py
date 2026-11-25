@@ -52,12 +52,11 @@ class LatLongDataAdmin(admin.ModelAdmin):
 @admin.register(ScrapeBatch)
 class ScrapeBatchAdmin(admin.ModelAdmin):
     list_display = (
-        "batch_id_short",
+        "requestid",
         "location_text",
         "status_text",
         "jobs_progress",
         "saved_records",
-        "duration",
         "created_at_text",
         "completed_at_text",
     )

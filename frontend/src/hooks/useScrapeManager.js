@@ -166,7 +166,7 @@ export function useScrapeManager({ onStatsRefresh }) {
     }
   }, [fetchCompletedBatches, showToast, taskStatus]);
 
-  const switchBatch = useCallback((batchId, title = '') => {
+  const switchBatch = useCallback((batchId, title = '', shouldTriggerBackend = false) => {
     if (!batchId) return;
     isInspectingHistoryRef.current = false;
     setCurrentRequestId(batchId);
@@ -182,8 +182,11 @@ export function useScrapeManager({ onStatsRefresh }) {
     // Remove from queue
     setQueuedRequests((prev) => prev.filter((q) => q.batch_id !== batchId && q.request_id !== batchId));
 
-    // Ensure backend starts it if queued
-    api.startQueuedBatch(batchId).catch(() => {});
+    // Only start if explicitly asked (e.g. promoting a waiting queued batch)
+    // NEVER when switching to a newly started batch that startScrape already dispatched!
+    if (shouldTriggerBackend) {
+      api.startQueuedBatch(batchId).catch(() => {});
+    }
   }, []);
 
   const inspectCompletedBatch = useCallback(async (batch) => {
@@ -301,7 +304,7 @@ export function useScrapeManager({ onStatsRefresh }) {
           if (prev.length > 0) {
             const next = prev[0];
             showToast(`Starting next in queue: ${next.city} (${next.location})...`, 'info', 4000);
-            switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`);
+            switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`, true);
             return prev.slice(1);
           }
           resetSession();
@@ -382,7 +385,7 @@ export function useScrapeManager({ onStatsRefresh }) {
               setQueuedRequests((prev) => prev.filter((q) => q.batch_id !== nextBatch.batch_id && q.request_id !== nextBatch.request_id));
               showToast(`Auto-starting next request: ${nextBatch.city} (${nextBatch.location})...`, 'success', 4000);
               setTimeout(() => {
-                switchBatch(nextBatch.batch_id || nextBatch.request_id, `${nextBatch.city} (${nextBatch.location})`);
+                switchBatch(nextBatch.batch_id || nextBatch.request_id, `${nextBatch.city} (${nextBatch.location})`, true);
               }, 2000);
             } else {
               // No more queued batches: empty the queue completely!
@@ -403,7 +406,7 @@ export function useScrapeManager({ onStatsRefresh }) {
             setQueuedRequests((prev) => prev.filter((q) => q.batch_id !== next.batch_id && q.request_id !== next.request_id));
             showToast(`Process stopped. Moving to next in queue: ${next.city} (${next.location})...`, 'info', 3000);
             setTimeout(() => {
-              switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`);
+              switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`, true);
             }, 1200);
           } else {
             setQueuedRequests([]);
@@ -566,7 +569,8 @@ export function useScrapeManager({ onStatsRefresh }) {
               5000
             );
           } else {
-            switchBatch(newReqId, `${newCity} (${newLocation})`);
+            // New batch is directly active; do NOT fire startQueuedBatch
+            switchBatch(newReqId, `${newCity} (${newLocation})`, false);
           }
         } else {
           setModalConfig({
@@ -635,14 +639,14 @@ export function useScrapeManager({ onStatsRefresh }) {
               const next = res.data.next_batch;
               showToast(`Starting next in queue: ${next.city} (${next.location})...`, 'info', 3000);
               setTimeout(() => {
-                switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`);
+                switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`, true);
               }, 1000);
             } else if (queuedRequests.length > 0) {
               const next = queuedRequests[0];
               setQueuedRequests((prev) => prev.slice(1));
               showToast(`Starting next in queue: ${next.city} (${next.location})...`, 'info', 3000);
               setTimeout(() => {
-                switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`);
+                switchBatch(next.batch_id || next.request_id, `${next.city} (${next.location})`, true);
               }, 1000);
             } else {
               setQueuedRequests([]);

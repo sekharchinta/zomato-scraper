@@ -830,5 +830,5 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
 def start_queued_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     """Explicitly triggers execution of a queued batch in Redis and PostgreSQL."""
     res = start_queued_batch(request_id)
-    status_code = 200 if res.get("status") in ["success", "already_finished"] else 400
+    status_code = 200 if res.get("status") in ["success", "already_finished", "already_running"] else 400
     return JsonResponse(res, status=status_code)

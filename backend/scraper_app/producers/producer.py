@@ -14,6 +14,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 import django_rq
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from rq.job import Job
 from rq.registry import FailedJobRegistry
@@ -472,43 +473,73 @@ def start_queued_batch(queued_batch: Any) -> Dict[str, Any]:
     if not queued_batch:
         return {"status": "error", "message": "Batch is empty"}
 
-    if isinstance(queued_batch, (str, uuid.UUID)):
-        batch_obj = ScrapeBatch.objects.filter(requestid=queued_batch).first()
-        if not batch_obj:
-            return {"status": "error", "message": f"Batch {queued_batch} not found"}
-        queued_batch = batch_obj
+    with transaction.atomic():
+        if isinstance(queued_batch, (str, uuid.UUID)):
+            batch_obj = ScrapeBatch.objects.select_for_update().filter(requestid=queued_batch).first()
+            if not batch_obj:
+                return {"status": "error", "message": f"Batch {queued_batch} not found"}
+            queued_batch = batch_obj
+        else:
+            queued_batch = ScrapeBatch.objects.select_for_update().filter(requestid=queued_batch.requestid).first()
 
-    if queued_batch.status not in ["queued", "pending"]:
+        if not queued_batch:
+            return {"status": "error", "message": "Batch not found"}
+
+        # Guard 1: If batch is already running or active, do NOT double-enqueue!
+        if queued_batch.status in ["extracting_urls", "processing_restaurants", "fetching_details"]:
+            return {
+                "status": "already_running",
+                "message": f"Batch is already running in status '{queued_batch.status}'",
+                "batch_id": str(queued_batch.requestid),
+            }
+
+        # Guard 2: If batch is already finished or terminated, return status
+        if queued_batch.status not in ["queued", "pending"]:
+            return {
+                "status": "already_finished",
+                "message": f"Batch is already in status '{queued_batch.status}'",
+                "batch_id": str(queued_batch.requestid),
+            }
+
+        # Guard 3: Check if restaurant jobs ALREADY exist in zomato_jobs for this batch!
+        from scraper_app.models import RestaurantJob
+        existing_jobs = RestaurantJob.objects.filter(batch=queued_batch)
+        if existing_jobs.exists():
+            queued_batch.status = "processing_restaurants"
+            queued_batch.started_at = queued_batch.started_at or timezone.now()
+            queued_batch.save(update_fields=["status", "started_at", "updated_at"])
+            push_res = push_urls_to_queue(str(queued_batch.requestid))
+            return {
+                "status": "success",
+                "message": f"Resumed {existing_jobs.count()} existing jobs for batch {queued_batch.requestid}",
+                "batch_id": str(queued_batch.requestid),
+                "enqueued_jobs": push_res.get("enqueued_jobs", 0),
+            }
+
+        queued_batch.status = "extracting_urls"
+        queued_batch.started_at = timezone.now()
+        queued_batch.save(update_fields=["status", "started_at", "updated_at"])
+
+        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+        queue = django_rq.get_queue(queue_name)
+
+        from scraper_app.tasks.url_extractor import extract_urls_from_latlongs
+        rq_job = queue.enqueue(
+            extract_urls_from_latlongs,
+            batch_id=str(queued_batch.requestid),
+            city=queued_batch.city,
+            location_raw=queued_batch.location,
+            location_key=queued_batch.location_key,
+            location_title=queued_batch.location,
+            job_timeout=1800,
+            retry=DEFAULT_RETRY,
+        )
         return {
-            "status": "already_finished",
-            "message": f"Batch is already in status '{queued_batch.status}'",
+            "status": "success",
+            "message": f"Started queued batch for {queued_batch.city} ({queued_batch.location})",
             "batch_id": str(queued_batch.requestid),
+            "rq_job_id": rq_job.id if rq_job else None,
         }
-
-    queued_batch.status = "extracting_urls"
-    queued_batch.started_at = timezone.now()
-    queued_batch.save(update_fields=["status", "started_at", "updated_at"])
-
-    queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-    queue = django_rq.get_queue(queue_name)
-
-    from scraper_app.tasks.url_extractor import extract_urls_from_latlongs
-    rq_job = queue.enqueue(
-        extract_urls_from_latlongs,
-        batch_id=str(queued_batch.requestid),
-        city=queued_batch.city,
-        location_raw=queued_batch.location,
-        location_key=queued_batch.location_key,
-        location_title=queued_batch.location,
-        job_timeout=1800,
-        retry=DEFAULT_RETRY,
-    )
-    return {
-        "status": "success",
-        "message": f"Started queued batch for {queued_batch.city} ({queued_batch.location})",
-        "batch_id": str(queued_batch.requestid),
-        "rq_job_id": rq_job.id if rq_job else None,
-    }
 
 
 def complete_or_terminate_batch_and_advance(
