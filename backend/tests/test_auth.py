@@ -112,3 +112,35 @@ class GoogleAuthTestCase(TestCase):
         for rec in stored_records:
             self.assertEqual(rec.user, user)
 
+    def test_unauthenticated_api_endpoints_return_401(self):
+        """Verifies that protected API endpoints reject unauthenticated requests with HTTP 401."""
+        endpoints = [
+            "/api/collection-stats/",
+            "/api/completed-batches/",
+            "/api/get-schema-fields/",
+            "/api/search-locations/?query=Hyderabad",
+        ]
+        for url in endpoints:
+            resp = self.client.get(url)
+            self.assertEqual(resp.status_code, 401, f"Expected 401 for {url}, got {resp.status_code}")
+            data = resp.json()
+            self.assertEqual(data.get("code"), "unauthenticated")
+            self.assertEqual(data.get("status"), "error")
+
+    def test_authenticated_api_endpoints_return_200(self):
+        """Verifies that authenticated users can access protected API endpoints."""
+        user = User.objects.create(username="auth_tester", email="auth_tester@example.com")
+        self.client.force_login(user)
+
+        endpoints = [
+            "/api/collection-stats/",
+            "/api/completed-batches/",
+            "/api/get-schema-fields/",
+        ]
+        for url in endpoints:
+            resp = self.client.get(url)
+            self.assertEqual(resp.status_code, 200, f"Expected 200 for {url}, got {resp.status_code}")
+            data = resp.json()
+            self.assertEqual(data.get("status"), "success")
+
+

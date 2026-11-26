@@ -4,9 +4,10 @@ Provides endpoints for Google configuration, token verification, session login,
 session inspection, and logout.
 """
 
+import functools
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from django.conf import settings
 from django.contrib.auth import login, logout
@@ -20,6 +21,26 @@ from google.oauth2 import id_token
 from scraper_app.models import UserProfile
 
 logger = logging.getLogger("auth")
+
+
+def api_login_required(view_func: Callable) -> Callable:
+    """
+    Decorator for REST API views requiring user authentication.
+    Returns HTTP 401 Unauthorized with standardized JSON error payload if not authenticated.
+    """
+    @functools.wraps(view_func)
+    def _wrapped_view(request, *args, **kwargs):
+        if not getattr(request, "user", None) or not request.user.is_authenticated:
+            return JsonResponse(
+                {
+                    "status": "error",
+                    "code": "unauthenticated",
+                    "message": "Authentication required. Please sign in with Google.",
+                },
+                status=401,
+            )
+        return view_func(request, *args, **kwargs)
+    return _wrapped_view
 
 
 @require_GET

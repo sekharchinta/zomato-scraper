@@ -9,6 +9,7 @@ import json
 import uuid
 from unittest.mock import MagicMock, patch
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.test import Client, SimpleTestCase, TestCase
 from django.utils import timezone
 import django_rq
@@ -208,6 +209,8 @@ class TestReactSPAView(SimpleTestCase):
 class TestAPIsAndModels(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="api_test_user", email="api_test_user@example.com")
+        self.client.force_login(self.user)
 
     def test_schema_fields_api(self):
         resp = self.client.get("/api/get-schema-fields/")
@@ -444,6 +447,9 @@ class TestRetryAndFailedJobsRecovery(TestCase):
 class TestLocationSearchLive(TestCase):
     """Verifies live location search 401 resolution, session warming, and preloaded state fallback (No caching)."""
 
+    def setUp(self):
+        self.user = User.objects.create_user(username="loc_user", email="loc@example.com")
+
     @patch("scraper.fetch_city_html_fallback")
     @patch("requests.Session.get")
     def test_location_search_api_401_falls_back_to_html_preloaded(self, mock_get, mock_html_fallback):
@@ -468,6 +474,7 @@ class TestLocationSearchLive(TestCase):
 
         rf = RequestFactory()
         req = rf.get("/api/search-locations/?query=amalapuram")
+        req.user = self.user
         resp = search_locations_api(req)
 
         self.assertEqual(resp.status_code, 200)
@@ -493,6 +500,7 @@ class TestLocationSearchLive(TestCase):
 
         rf = RequestFactory()
         req = rf.get("/api/search-locations/?query=completely_unknown_place")
+        req.user = self.user
         resp = search_locations_api(req)
 
         self.assertEqual(resp.status_code, 200)
@@ -505,6 +513,9 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
     """Verifies that URL extraction runs entirely through the single queue 'zomato'."""
 
     def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(username="queue_test_user", email="queue_test_user@example.com")
+        self.client.force_login(self.user)
         q = django_rq.get_queue(SINGLE_QUEUE_NAME)
         q._commit_mode = "auto"
         q.empty()
@@ -1052,8 +1063,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
         self.assertEqual(RestaurantRecord.objects.filter(batch=batch).count(), 1)
 
         # Call delete_batch_api
-        client = Client()
-        resp = client.post(f"/api/delete-batch/{batch.batch_id}/")
+        resp = self.client.post(f"/api/delete-batch/{batch.batch_id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["status"], "success")
@@ -1065,9 +1075,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
 
     def test_delete_batch_api_not_found(self):
         """Verifies delete_batch_api returns 404 for nonexistent batch."""
-        from django.test import Client
-        client = Client()
-        resp = client.post("/api/delete-batch/00000000-0000-0000-0000-000000000000/")
+        resp = self.client.post("/api/delete-batch/00000000-0000-0000-0000-000000000000/")
         self.assertEqual(resp.status_code, 404)
         data = resp.json()
         self.assertEqual(data["status"], "error")
@@ -1139,8 +1147,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
             status="queued",
         )
 
-        client = Client()
-        resp = client.get(f"/api/scrape-data/{queued_b.batch_id}/")
+        resp = self.client.get(f"/api/scrape-data/{queued_b.batch_id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["status"], "queued")

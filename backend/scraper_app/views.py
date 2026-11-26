@@ -26,6 +26,7 @@ from rq.registry import FailedJobRegistry
 from config import Config, SINGLE_QUEUE_NAME
 from scraper import ZomatoScraper, fetch_city_html_fallback
 from scraper_app.models import LatLongData, RestaurantJob, RestaurantRecord, ScrapeBatch, ScrapeRequest, generate_location_key
+from scraper_app.auth_views import api_login_required
 from scraper_app.parsers.parser import (
     ALL_FIELDS,
     DEFAULT_FIELDS,
@@ -71,6 +72,7 @@ def react_app_view(request: HttpRequest) -> HttpResponse:
     )
 
 
+@api_login_required
 @require_GET
 def get_collection_stats_api(request: HttpRequest) -> JsonResponse:
     """Returns dynamic counts directly from PostgreSQL Django models."""
@@ -80,6 +82,7 @@ def get_collection_stats_api(request: HttpRequest) -> JsonResponse:
     })
 
 
+@api_login_required
 @require_GET
 def search_locations_api(request: HttpRequest) -> JsonResponse:
     """
@@ -152,6 +155,7 @@ def search_locations_api(request: HttpRequest) -> JsonResponse:
     return JsonResponse(resp_payload)
 
 
+@api_login_required
 @require_GET
 def get_schema_fields_api(request: HttpRequest) -> JsonResponse:
     """Returns example document format and lists of default and customizable fields."""
@@ -163,6 +167,7 @@ def get_schema_fields_api(request: HttpRequest) -> JsonResponse:
     })
 
 
+@api_login_required
 @csrf_exempt
 @require_POST
 def start_scrape_api(request: HttpRequest) -> JsonResponse:
@@ -231,6 +236,7 @@ def get_batch_elapsed_seconds(b: Optional[ScrapeBatch]) -> int:
     return max(0, int((dj_timezone.now() - b.created_at).total_seconds()))
 
 
+@api_login_required
 @require_GET
 def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
     """
@@ -454,6 +460,7 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
     })
 
 
+@api_login_required
 @require_GET
 def get_scrape_data_api(request: HttpRequest, request_id: str) -> JsonResponse:
     """
@@ -521,6 +528,7 @@ def get_scrape_data_api(request: HttpRequest, request_id: str) -> JsonResponse:
     })
 
 
+@api_login_required
 @require_GET
 def export_csv_api(request: HttpRequest, request_id: str) -> HttpResponse:
     """
@@ -586,6 +594,7 @@ def export_csv_api(request: HttpRequest, request_id: str) -> HttpResponse:
     return response
 
 
+@api_login_required
 @require_GET
 def get_completed_batches_api(request: HttpRequest) -> JsonResponse:
     """
@@ -637,6 +646,7 @@ def get_completed_batches_api(request: HttpRequest) -> JsonResponse:
     })
 
 
+@api_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def test_slack_alert_api(request: HttpRequest) -> JsonResponse:
@@ -652,6 +662,7 @@ def test_slack_alert_api(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"status": "error", "message": info}, status=500)
 
 
+@api_login_required
 @csrf_exempt
 @require_http_methods(["POST", "DELETE"])
 def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
@@ -758,6 +769,7 @@ def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
 
 
 
+@api_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
@@ -828,6 +840,7 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     })
 
 
+@api_login_required
 @csrf_exempt
 @require_http_methods(["POST"])
 def start_queued_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
