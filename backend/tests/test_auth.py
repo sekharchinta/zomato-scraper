@@ -241,6 +241,49 @@ class GoogleAuthTestCase(TestCase):
         self.assertIn(str(batch_b.batch_id), batch_ids_b)
         self.assertNotIn(str(batch_a.batch_id), batch_ids_b)
 
+    def test_simultaneous_multiuser_scrape_requests_isolation(self):
+        """Verifies that multiple users submitting scrape requests create isolated batches without collision."""
+        from scraper_app.models import ScrapeBatch
+
+        user_1 = User.objects.create(username="concur_1", email="concur_1@example.com")
+        user_2 = User.objects.create(username="concur_2", email="concur_2@example.com")
+
+        client_1 = Client()
+        client_1.force_login(user_1)
+        client_2 = Client()
+        client_2.force_login(user_2)
+
+        # User 1 submits a scrape
+        resp_1 = client_1.post(
+            "/api/start-scrape/",
+            data={"city": "Hyderabad", "location": "Banjara Hills"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp_1.status_code, 200)
+        data_1 = resp_1.json()
+        batch_id_1 = data_1.get("batch_id")
+
+        # User 2 submits a scrape
+        resp_2 = client_2.post(
+            "/api/start-scrape/",
+            data={"city": "Bengaluru", "location": "Koramangala"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp_2.status_code, 200)
+        data_2 = resp_2.json()
+        batch_id_2 = data_2.get("batch_id")
+
+        # Verify distinct batches created and assigned to proper users
+        self.assertNotEqual(batch_id_1, batch_id_2)
+        b1 = ScrapeBatch.objects.get(batch_id=batch_id_1)
+        b2 = ScrapeBatch.objects.get(batch_id=batch_id_2)
+
+        self.assertEqual(b1.user, user_1)
+        self.assertEqual(b2.user, user_2)
+        self.assertEqual(b1.city, "Hyderabad")
+        self.assertEqual(b2.city, "Bengaluru")
+
+
 
 
 
