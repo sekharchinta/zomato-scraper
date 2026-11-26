@@ -764,6 +764,13 @@ def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
         except Exception as q_scan_err:
             logger.warning("Error scanning queue jobs for batch %s: %s", batch_id_str, q_scan_err)
 
+        # Remove FairQueue batch subqueue and unregister from active rotation
+        try:
+            from scraper_app.workers.fair_queue import FairQueue
+            FairQueue.remove_batch(queue.connection, queue_name, batch_id_str)
+        except Exception as fq_err:
+            logger.warning("Error removing FairQueue batch subqueue for %s: %s", batch_id_str, fq_err)
+
         # Remove from FailedJobRegistry if present
         try:
             registry = FailedJobRegistry(queue=queue)
@@ -874,6 +881,13 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
             if b_id and str(b_id) == batch_id_str:
                 q_job.cancel()
                 q_job.delete()
+
+        # Remove FairQueue batch subqueue and unregister from active rotation
+        try:
+            from scraper_app.workers.fair_queue import FairQueue
+            FairQueue.remove_batch(queue.connection, queue_name, batch_id_str)
+        except Exception as fq_err:
+            logger.warning("Error removing FairQueue batch subqueue for %s on terminate: %s", batch_id_str, fq_err)
     except Exception as q_err:
         logger.warning("Error cancelling queue jobs on terminate for batch %s: %s", batch_id_str, q_err)
 

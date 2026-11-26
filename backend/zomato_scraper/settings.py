@@ -117,12 +117,14 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD,
         'DEFAULT_TIMEOUT': 720,
+        'QUEUE_CLASS': 'scraper_app.workers.fair_queue.FairQueue',
     },
 }
 
 RQ_SHOW_ADMIN_LINK = True
 RQ = {
     'COMMIT_MODE': 'auto',
+    'QUEUE_CLASS': 'scraper_app.workers.fair_queue.FairQueue',
 }
 
 # Password validation

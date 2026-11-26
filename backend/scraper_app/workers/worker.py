@@ -58,8 +58,15 @@ def _worker_process_entrypoint(queue_name: str, worker_index: int = 1, burst: bo
     connection = django_rq.get_connection(queue_name)
 
     from scraper_app.workers.failed_jobs import rq_job_failure_handler
+    from scraper_app.workers.fair_queue import FairQueue
 
-    worker = Worker([queue], connection=connection, name=worker_name, exception_handlers=[rq_job_failure_handler])
+    worker = Worker(
+        [queue],
+        connection=connection,
+        name=worker_name,
+        queue_class=FairQueue,
+        exception_handlers=[rq_job_failure_handler],
+    )
     try:
         worker.work(burst=burst, with_scheduler=(worker_index == 1))
     except KeyboardInterrupt:
