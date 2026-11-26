@@ -57,6 +57,7 @@ class GoogleAuthTestCase(TestCase):
         self.assertEqual(data.get("status"), "success")
         user_info = data.get("user", {})
         self.assertEqual(user_info.get("email"), "testuser@example.com")
+        self.assertEqual(user_info.get("google_id"), "google-test-sub-12345")
         self.assertEqual(user_info.get("name"), "Test Scraper User")
         self.assertEqual(user_info.get("avatar"), "https://lh3.googleusercontent.com/test-pic.jpg")
 
@@ -74,6 +75,7 @@ class GoogleAuthTestCase(TestCase):
         me_data = me_resp.json()
         self.assertTrue(me_data.get("authenticated"))
         self.assertEqual(me_data["user"]["email"], "testuser@example.com")
+        self.assertEqual(me_data["user"]["google_id"], "google-test-sub-12345")
 
         # Verify logout
         logout_resp = self.client.post("/api/auth/logout/")
@@ -142,5 +144,47 @@ class GoogleAuthTestCase(TestCase):
             self.assertEqual(resp.status_code, 200, f"Expected 200 for {url}, got {resp.status_code}")
             data = resp.json()
             self.assertEqual(data.get("status"), "success")
+
+    @patch("scraper_app.auth_views.id_token.verify_oauth2_token")
+    def test_relogin_with_same_google_id_reuses_same_user_id(self, mock_verify):
+        """Verifies that subsequent logins with the exact same google_id reuse the existing User record and user.id."""
+        mock_verify.return_value = {
+            "sub": "105697140295126583646",
+            "email": "somasekhar.chinta@gamyam.co",
+            "name": "Somasekhar Chinta",
+            "picture": "https://lh3.googleusercontent.com/pic.jpg",
+            "email_verified": True,
+        }
+
+        # First login (registration / initial creation)
+        resp1 = self.client.post(
+            "/api/auth/google/",
+            data='{"credential": "mocked-token-1"}',
+            content_type="application/json",
+        )
+        self.assertEqual(resp1.status_code, 200)
+        user_1 = resp1.json()["user"]
+        self.assertEqual(user_1["google_id"], "105697140295126583646")
+        user_id_1 = user_1["id"]
+
+        # Logout
+        self.client.post("/api/auth/logout/")
+
+        # Second login (re-login with same google_id)
+        resp2 = self.client.post(
+            "/api/auth/google/",
+            data='{"credential": "mocked-token-2"}',
+            content_type="application/json",
+        )
+        self.assertEqual(resp2.status_code, 200)
+        user_2 = resp2.json()["user"]
+        self.assertEqual(user_2["google_id"], "105697140295126583646")
+        user_id_2 = user_2["id"]
+
+        # Assert User ID is 100% identical and no duplicate records were created
+        self.assertEqual(user_id_1, user_id_2)
+        self.assertEqual(User.objects.filter(email="somasekhar.chinta@gamyam.co").count(), 1)
+        self.assertEqual(UserProfile.objects.filter(google_id="105697140295126583646").count(), 1)
+
 
 

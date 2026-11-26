@@ -89,7 +89,7 @@ def google_auth_callback(request) -> JsonResponse:
             return JsonResponse({"status": "error", "message": "Invalid Google token payload"}, status=400)
 
         # First, search User by profile google_id
-        profile = UserProfile.objects.filter(google_id=google_id).first()
+        profile = UserProfile.objects.select_related("user").filter(google_id=google_id).first()
         if profile:
             user = profile.user
             if email and user.email != email:
@@ -150,6 +150,7 @@ def google_auth_callback(request) -> JsonResponse:
                 "message": "Authenticated successfully",
                 "user": {
                     "id": user.id,
+                    "google_id": profile.google_id,
                     "email": user.email,
                     "name": display_name,
                     "avatar": profile.avatar_url,
@@ -174,11 +175,14 @@ def get_current_user(request) -> JsonResponse:
 
     user = request.user
     avatar = ""
+    google_id = ""
     try:
         if hasattr(user, "profile"):
             avatar = user.profile.avatar_url or ""
+            google_id = user.profile.google_id or ""
     except Exception:
         avatar = ""
+        google_id = ""
 
     display_name = f"{user.first_name} {user.last_name}".strip() or user.username
 
@@ -187,6 +191,7 @@ def get_current_user(request) -> JsonResponse:
             "authenticated": True,
             "user": {
                 "id": user.id,
+                "google_id": google_id,
                 "email": user.email,
                 "name": display_name,
                 "avatar": avatar,
