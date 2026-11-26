@@ -227,6 +227,7 @@ class TestAPIsAndModels(TestCase):
         b_uuid = uuid.uuid4()
         batch = ScrapeBatch.objects.create(
             batch_id=b_uuid,
+            user=self.user,
             city="Hyderabad",
             location="Banjara Hills",
             location_key="loc_hyderabad_banjara_hills",
@@ -320,6 +321,7 @@ class TestAPIsAndModels(TestCase):
         running_uuid = uuid.uuid4()
         ScrapeBatch.objects.create(
             batch_id=running_uuid,
+            user=self.user,
             city="Hyderabad",
             location="Jubilee Hills",
             status="processing_restaurants",
@@ -607,6 +609,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
         b_uuid = uuid.uuid4()
         batch = ScrapeBatch.objects.create(
             batch_id=b_uuid,
+            user=self.user,
             city="Hyderabad",
             location="Banjara Hills",
             status="queued",
@@ -694,6 +697,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
         b_uuid = uuid.uuid4()
         batch = ScrapeBatch.objects.create(
             batch_id=b_uuid,
+            user=self.user,
             city="Hyderabad",
             location="Banjara Hills",
             status="queued",
@@ -1031,6 +1035,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
 
         # Create batch in DB
         batch = ScrapeBatch.objects.create(
+            user=self.user,
             city="Visakhapatnam",
             location="Beach Road",
             status="queued",
@@ -1142,6 +1147,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
         from scraper_app.models import ScrapeBatch
 
         queued_b = ScrapeBatch.objects.create(
+            user=self.user,
             city="Guntur",
             location="Arundelpet",
             status="queued",
@@ -1233,6 +1239,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
         from scraper_app.models import RestaurantJob, RestaurantRecord, ScrapeBatch
 
         batch = ScrapeBatch.objects.create(
+            user=self.user,
             city="Hyderabad",
             location="Madhapur",
             status="processing_restaurants",
@@ -1261,6 +1268,7 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
 
         # Also create a queued batch to test next_batch resolution
         next_batch = ScrapeBatch.objects.create(
+            user=self.user,
             city="Hyderabad",
             location="Gachibowli",
             status="queued",

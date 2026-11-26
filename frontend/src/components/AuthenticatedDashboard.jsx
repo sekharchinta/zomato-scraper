@@ -10,7 +10,7 @@ import { useLocationSearch } from '../hooks/useLocationSearch';
 import { useScrapeManager } from '../hooks/useScrapeManager';
 
 export function AuthenticatedDashboard({ auth }) {
-  const { stats, refreshStats } = useCollectionStats();
+  const { stats, refreshStats } = useCollectionStats({ user: auth?.user });
   const { suggestions, loading: isSearchingLocations, searchLocations } = useLocationSearch();
 
   const {
@@ -39,7 +39,7 @@ export function AuthenticatedDashboard({ auth }) {
     downloadBatchCsv,
     testSlackNotification,
     fetchCompletedBatches,
-  } = useScrapeManager({ onStatsRefresh: refreshStats });
+  } = useScrapeManager({ user: auth?.user, onStatsRefresh: refreshStats });
 
   return (
     <div className="min-h-screen bg-engineering-grid text-white font-sans antialiased selection:bg-emerald-500 selection:text-black">

@@ -75,10 +75,12 @@ def react_app_view(request: HttpRequest) -> HttpResponse:
 @api_login_required
 @require_GET
 def get_collection_stats_api(request: HttpRequest) -> JsonResponse:
-    """Returns dynamic counts directly from PostgreSQL Django models."""
+    """Returns dynamic counts directly from PostgreSQL Django models scoped to the authenticated user."""
+    user = getattr(request, "user", None)
+    scoped_user = user if (user and user.is_authenticated and not (user.is_staff or user.is_superuser)) else None
     return JsonResponse({
         "status": "success",
-        "stats": ScrapeBatch.get_collection_stats(),
+        "stats": ScrapeBatch.get_collection_stats(user=scoped_user),
     })
 
 
@@ -247,7 +249,7 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
     user = getattr(request, "user", None)
     is_authenticated = user and user.is_authenticated
     is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
-    user_q = (models.Q(user=user) | models.Q(user__isnull=True)) if (is_authenticated and not is_staff) else models.Q()
+    user_q = models.Q(user=user) if (is_authenticated and not is_staff) else models.Q()
 
     req = None
     if request_id == "active":
@@ -319,8 +321,8 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
                 }, status=404)
 
         # STRICT MULTI-TENANT ISOLATION:
-        # Reject cross-user access if this batch belongs to another user
-        if req.user and is_authenticated and not is_staff and req.user != user:
+        # Reject cross-user access if this batch does not belong to this user
+        if is_authenticated and not is_staff and req.user != user:
             return JsonResponse({
                 "status": "error",
                 "code": "permission_denied",
@@ -483,7 +485,7 @@ def get_scrape_data_api(request: HttpRequest, request_id: str) -> JsonResponse:
     user = getattr(request, "user", None)
     is_authenticated = user and user.is_authenticated
     is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
-    if req.user and is_authenticated and not is_staff and req.user != user:
+    if is_authenticated and not is_staff and req.user != user:
         return JsonResponse({
             "status": "error",
             "code": "permission_denied",
@@ -562,7 +564,7 @@ def export_csv_api(request: HttpRequest, request_id: str) -> HttpResponse:
     # User-based download authorization: regular users can only download their own batches
     user = getattr(request, "user", None)
     if user and user.is_authenticated and not (user.is_staff or user.is_superuser):
-        if req.user and req.user != user:
+        if req.user != user:
             return JsonResponse(
                 {
                     "status": "error",
@@ -724,7 +726,7 @@ def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     user = getattr(request, "user", None)
     is_authenticated = user and user.is_authenticated
     is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
-    if req.user and is_authenticated and not is_staff and req.user != user:
+    if is_authenticated and not is_staff and req.user != user:
         return JsonResponse({
             "status": "error",
             "code": "permission_denied",
@@ -849,7 +851,7 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     user = getattr(request, "user", None)
     is_authenticated = user and user.is_authenticated
     is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
-    if req.user and is_authenticated and not is_staff and req.user != user:
+    if is_authenticated and not is_staff and req.user != user:
         return JsonResponse({
             "status": "error",
             "code": "permission_denied",

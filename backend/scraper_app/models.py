@@ -163,16 +163,21 @@ class ScrapeBatch(models.Model):
         return f"{self.requestid} - {self.city} ({self.location}) - {self.status} ({self.progress}%){cache_label}"
 
     @classmethod
-    def get_collection_stats(cls) -> Dict[str, int]:
+    def get_collection_stats(cls, user: Optional[Any] = None) -> Dict[str, int]:
         """
         Returns live statistics directly via PostgreSQL Django models.
+        When user is provided, scopes counts strictly to the user's extractions.
         All database metrics handled by Django models only.
         """
         try:
-            total_restaurants = RestaurantRecord.objects.count()
-            total_batches = cls.objects.count()
-            total_jobs = RestaurantJob.objects.count()
-            reviews_sum = RestaurantRecord.objects.aggregate(total=models.Sum("total_reviews"))["total"] or 0
+            batch_qs = cls.objects.filter(user=user) if user else cls.objects.all()
+            job_qs = RestaurantJob.objects.filter(batch__user=user) if user else RestaurantJob.objects.all()
+            record_qs = RestaurantRecord.objects.filter(requestid__user=user) if user else RestaurantRecord.objects.all()
+
+            total_restaurants = record_qs.count()
+            total_batches = batch_qs.count()
+            total_jobs = job_qs.count()
+            reviews_sum = record_qs.aggregate(total=models.Sum("total_reviews"))["total"] or 0
             return {
                 "restaurants_urls": total_jobs,
                 "restaurants_data": total_restaurants,

@@ -34,7 +34,7 @@ const mergeCompletedBatches = (serverBatches, activeBatch) => {
   return list;
 };
 
-export function useScrapeManager({ onStatsRefresh }) {
+export function useScrapeManager({ user, onStatsRefresh } = {}) {
   const [currentRequestId, setCurrentRequestId] = useState(null);
   const [taskStatus, setTaskStatus] = useState('ready');
   const [progressPct, setProgressPct] = useState(0);
@@ -50,6 +50,10 @@ export function useScrapeManager({ onStatsRefresh }) {
   const [modalConfig, setModalConfig] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTerminating, setIsTerminating] = useState(false);
+
+  const getStorageKey = useCallback((u) => {
+    return u?.id ? `zomato_active_request_id_u${u.id}` : 'zomato_active_request_id';
+  }, []);
 
   const completedNotifiedBatches = useRef(new Set());
   const pollTimerRef = useRef(null);
@@ -117,34 +121,43 @@ export function useScrapeManager({ onStatsRefresh }) {
     }
   }, [showToast]);
 
+  const performReset = useCallback(() => {
+    setModalConfig(null);
+    isInspectingHistoryRef.current = false;
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setCurrentRequestId(null);
+    currentRequestIdRef.current = null;
+    setTaskStatus('ready');
+    setProgressPct(0);
+    setProgressTitle('Select Location to Scrape');
+    setProgressStepDesc('Ready to start extraction pipeline...');
+    setCounts({ urls: 0, details: 0, delivery: 0 });
+    setScrapeData([]);
+    setTableFields([]);
+    setQueuedRequests([]);
+
+    localStorage.removeItem(getStorageKey(user));
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('request_id')) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    fetchCompletedBatches();
+  }, [fetchCompletedBatches, getStorageKey, user]);
+
+  // Account switch detection: if active user changes, immediately clear state & reload for new user
+  const prevUserIdRef = useRef(user?.id);
+  useEffect(() => {
+    if (prevUserIdRef.current !== undefined && prevUserIdRef.current !== user?.id) {
+      prevUserIdRef.current = user?.id;
+      performReset();
+    }
+  }, [user?.id, performReset]);
+
   const resetSession = useCallback(() => {
     const isRunning = ['extracting_urls', 'processing_restaurants', 'fetching_details'].includes(taskStatus);
-    const executeReset = () => {
-      setModalConfig(null);
-      isInspectingHistoryRef.current = false;
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-      setCurrentRequestId(null);
-      currentRequestIdRef.current = null;
-      setTaskStatus('ready');
-      setProgressPct(0);
-      setProgressTitle('Select Location to Scrape');
-      setProgressStepDesc('Ready to start extraction pipeline...');
-      setCounts({ urls: 0, details: 0, delivery: 0 });
-      setScrapeData([]);
-      setTableFields([]);
-      setQueuedRequests([]);
-
-      localStorage.removeItem('zomato_active_request_id');
-      const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.has('request_id')) {
-        window.history.replaceState(null, '', window.location.pathname);
-      }
-      fetchCompletedBatches();
-      showToast('Session reset. Ready for new search.', 'info', 3000);
-    };
 
     if (isRunning) {
       setModalConfig({
@@ -158,13 +171,17 @@ export function useScrapeManager({ onStatsRefresh }) {
         type: 'confirm',
         confirmText: 'Reset View',
         cancelText: 'Stay on Live View',
-        onConfirm: executeReset,
+        onConfirm: () => {
+          performReset();
+          showToast('Session reset. Ready for new search.', 'info', 3000);
+        },
         onCancel: () => setModalConfig(null),
       });
     } else {
-      executeReset();
+      performReset();
+      showToast('Session reset. Ready for new search.', 'info', 3000);
     }
-  }, [fetchCompletedBatches, showToast, taskStatus]);
+  }, [performReset, showToast, taskStatus]);
 
   const switchBatch = useCallback((batchId, title = '', shouldTriggerBackend = false) => {
     if (!batchId) return;
@@ -176,7 +193,7 @@ export function useScrapeManager({ onStatsRefresh }) {
     setProgressPct(0);
     if (title) setProgressTitle(title);
 
-    localStorage.setItem('zomato_active_request_id', batchId);
+    localStorage.setItem(getStorageKey(user), batchId);
     window.history.replaceState(null, '', `?request_id=${encodeURIComponent(batchId)}`);
 
     // Remove from queue
@@ -187,7 +204,7 @@ export function useScrapeManager({ onStatsRefresh }) {
     if (shouldTriggerBackend) {
       api.startQueuedBatch(batchId).catch(() => {});
     }
-  }, []);
+  }, [getStorageKey, user]);
 
   const inspectCompletedBatch = useCallback(async (batch) => {
     if (!batch) return;
@@ -206,11 +223,16 @@ export function useScrapeManager({ onStatsRefresh }) {
       delivery: savedCount,
     });
     setScrapeData([]);
-    localStorage.setItem('zomato_active_request_id', batchId);
+    localStorage.setItem(getStorageKey(user), batchId);
     window.history.replaceState(null, '', `?request_id=${encodeURIComponent(batchId)}`);
 
     try {
       const res = await api.getScrapeData(batchId);
+      if (res.status === 403 || res.data?.code === 'permission_denied') {
+        showToast('Access Denied: You do not have permission to view that extraction batch.', 'error', 5000);
+        performReset();
+        return;
+      }
       if (res.ok && res.data && res.data.status === 'success') {
         setScrapeData(res.data.data || []);
         if (res.data.fields && res.data.fields.length > 0) {
@@ -221,12 +243,17 @@ export function useScrapeManager({ onStatsRefresh }) {
       console.warn('Error inspecting batch:', e);
     }
     showToast(`Loaded ${savedCount} records for ${batch.city} (${batch.location})`, 'info', 3000);
-  }, [showToast]);
+  }, [getStorageKey, performReset, showToast, user]);
 
   const fetchScrapedData = useCallback(async (reqId, fields = []) => {
     if (!reqId) return;
     try {
       const res = await api.getScrapeData(reqId, fields);
+      if (res.status === 403 || res.data?.code === 'permission_denied') {
+        showToast('Access Denied: You do not have permission to view this extraction data.', 'error', 5000);
+        performReset();
+        return;
+      }
       // Guard against stale async responses overwriting current batch
       if (reqId !== currentRequestIdRef.current) return;
       if (res.ok && res.data && res.data.status === 'success') {
@@ -238,7 +265,7 @@ export function useScrapeManager({ onStatsRefresh }) {
     } catch (err) {
       console.warn('Error fetching preview data:', err);
     }
-  }, []);
+  }, [performReset, showToast]);
 
   const syncQueuedBatches = useCallback((backendList) => {
     if (!Array.isArray(backendList)) return;
@@ -261,13 +288,26 @@ export function useScrapeManager({ onStatsRefresh }) {
     try {
       const res = await api.getScrapeStatus(reqId);
 
+      // Handle 403 Forbidden (cross-user or unassigned batch access attempt)
+      if (res.status === 403 || res.data?.code === 'permission_denied') {
+        console.warn(`[Pipeline Sync] Access denied for batch ${reqId} (403). Purging.`);
+        localStorage.removeItem(getStorageKey(user));
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('request_id') === reqId) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+        showToast('Access Denied: You do not have permission to view that extraction request.', 'error', 5000);
+        performReset();
+        return;
+      }
+
       // Handle 404 (deleted/missing batch)
       if (res.status === 404) {
         console.warn(`[Pipeline Sync] Batch ${reqId} not found (404). Recovering.`);
         const deadId = reqId;
         setCurrentRequestId(null);
         currentRequestIdRef.current = null;
-        localStorage.removeItem('zomato_active_request_id');
+        localStorage.removeItem(getStorageKey(user));
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('request_id') === deadId) {
@@ -470,7 +510,7 @@ export function useScrapeManager({ onStatsRefresh }) {
 
       const urlParams = new URLSearchParams(window.location.search);
       const paramId = urlParams.get('request_id');
-      const savedId = localStorage.getItem('zomato_active_request_id');
+      const savedId = localStorage.getItem(getStorageKey(user));
 
       let targetId = paramId || savedId;
       let targetTitle = null;
@@ -478,7 +518,16 @@ export function useScrapeManager({ onStatsRefresh }) {
       try {
         const queryUrl = paramId ? paramId : 'active';
         const res = await api.getScrapeStatus(queryUrl);
-        if (res.ok && res.data && res.data.status === 'success') {
+
+        if (res.status === 403 || res.data?.code === 'permission_denied') {
+          console.warn('[Initial Check] Forbidden batch in URL or session (403). Purging.');
+          localStorage.removeItem(getStorageKey(user));
+          if (paramId) {
+            window.history.replaceState(null, '', window.location.pathname);
+          }
+          targetId = null;
+          showToast('Access Denied: You do not have permission to view that extraction request.', 'error', 5000);
+        } else if (res.ok && res.data && res.data.status === 'success') {
           const d = res.data;
           if (Array.isArray(d.queued_batches)) {
             syncQueuedBatches(d.queued_batches);
@@ -499,13 +548,13 @@ export function useScrapeManager({ onStatsRefresh }) {
         setCurrentRequestId(targetId);
         currentRequestIdRef.current = targetId;
         if (targetTitle) setProgressTitle(targetTitle);
-        localStorage.setItem('zomato_active_request_id', targetId);
+        localStorage.setItem(getStorageKey(user), targetId);
         window.history.replaceState(null, '', `?request_id=${encodeURIComponent(targetId)}`);
       }
     }
 
     initMount();
-  }, [fetchCompletedBatches, syncQueuedBatches]);
+  }, [fetchCompletedBatches, syncQueuedBatches, getStorageKey, user, showToast]);
 
   const startPipeline = useCallback(
     async ({ city, location, selectedFields, requestId }) => {
