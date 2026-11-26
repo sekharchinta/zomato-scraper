@@ -388,11 +388,16 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
             "elapsed_seconds": get_batch_elapsed_seconds(running_batch),
         }
 
-    # Look up recent completed batches to keep history constantly fresh
+    # Look up recent completed batches to keep history constantly fresh (user-scoped)
+    user = getattr(request, "user", None)
+    user_filter = models.Q(user=user) if (user and user.is_authenticated and not (user.is_staff or user.is_superuser)) else models.Q()
+
     recent_completed_qs = ScrapeBatch.objects.filter(
-        models.Q(status="completed") |
-        models.Q(status__in=["terminated", "failed"], total_restaurants__gt=0) |
-        models.Q(progress=100, total_restaurants__gt=0)
+        (
+            models.Q(status="completed") |
+            models.Q(status__in=["terminated", "failed"], total_restaurants__gt=0) |
+            models.Q(progress=100, total_restaurants__gt=0)
+        ) & user_filter
     ).exclude(
         models.Q(status__in=["terminated", "failed"], total_restaurants=0)
     ).order_by(
@@ -545,6 +550,19 @@ def export_csv_api(request: HttpRequest, request_id: str) -> HttpResponse:
         except Exception:
             raise Http404("Request ID not found")
 
+    # User-based download authorization: regular users can only download their own batches
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated and not (user.is_staff or user.is_superuser):
+        if req.user and req.user != user:
+            return JsonResponse(
+                {
+                    "status": "error",
+                    "code": "permission_denied",
+                    "message": "Permission denied: You can only download your own extraction batches.",
+                },
+                status=403,
+            )
+
     custom_fields_param = request.GET.get("fields")
     if custom_fields_param:
         fields = [f.strip() for f in custom_fields_param.split(",") if f.strip()]
@@ -602,10 +620,15 @@ def get_completed_batches_api(request: HttpRequest) -> JsonResponse:
     Used by frontend to display completed requests history and provide instant CSV download buttons.
     """
     limit = int(request.GET.get("limit", 25))
+    user = getattr(request, "user", None)
+    user_filter = models.Q(user=user) if (user and user.is_authenticated and not (user.is_staff or user.is_superuser)) else models.Q()
+
     batches = ScrapeBatch.objects.filter(
-        models.Q(status="completed") |
-        models.Q(status__in=["terminated", "failed"], total_restaurants__gt=0) |
-        models.Q(progress=100, total_restaurants__gt=0)
+        (
+            models.Q(status="completed") |
+            models.Q(status__in=["terminated", "failed"], total_restaurants__gt=0) |
+            models.Q(progress=100, total_restaurants__gt=0)
+        ) & user_filter
     ).exclude(
         models.Q(status__in=["terminated", "failed"], total_restaurants=0)
     ).order_by(

@@ -588,7 +588,7 @@ class UserProfile(models.Model):
     Stored in PostgreSQL schema 'zomato' table 'zomato_user_profiles'.
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    google_id = models.CharField(max_length=255, unique=True, db_index=True, help_text="Google unique subject ID (sub)")
+    google_id = models.CharField(max_length=255, primary_key=True, help_text="Google unique subject ID (sub)")
     avatar_url = models.URLField(max_length=1000, blank=True, default="", help_text="User Google avatar picture URL")
     email_verified = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -185,6 +185,62 @@ class GoogleAuthTestCase(TestCase):
         self.assertEqual(user_id_1, user_id_2)
         self.assertEqual(User.objects.filter(email="somasekhar.chinta@gamyam.co").count(), 1)
         self.assertEqual(UserProfile.objects.filter(google_id="105697140295126583646").count(), 1)
+        # Verify google_id is the primary key of UserProfile
+        profile = UserProfile.objects.get(google_id="105697140295126583646")
+        self.assertEqual(profile.pk, "105697140295126583646")
+        self.assertEqual(profile.google_id, profile.pk)
+
+    def test_user_based_downloads_isolation_and_export_csv(self):
+        """Verifies that users only see their own completed batches and cannot export other users' batches."""
+        from scraper_app.models import ScrapeBatch
+
+        user_a = User.objects.create(username="user_a", email="user_a@example.com")
+        user_b = User.objects.create(username="user_b", email="user_b@example.com")
+
+        batch_a = ScrapeBatch.objects.create(
+            user=user_a,
+            city="Hyderabad",
+            location="Gachibowli",
+            status="completed",
+            progress=100,
+            total_restaurants=10,
+            completed_jobs=10,
+        )
+        batch_b = ScrapeBatch.objects.create(
+            user=user_b,
+            city="Bengaluru",
+            location="Koramangala",
+            status="completed",
+            progress=100,
+            total_restaurants=15,
+            completed_jobs=15,
+        )
+
+        # 1. Log in as user_a
+        self.client.force_login(user_a)
+        resp_a = self.client.get("/api/completed-batches/")
+        self.assertEqual(resp_a.status_code, 200)
+        batch_ids_a = [b["batch_id"] for b in resp_a.json()["batches"]]
+        self.assertIn(str(batch_a.batch_id), batch_ids_a)
+        self.assertNotIn(str(batch_b.batch_id), batch_ids_a)
+
+        # User A can export Batch A
+        export_a = self.client.get(f"/api/export-csv/{batch_a.batch_id}/")
+        self.assertEqual(export_a.status_code, 200)
+
+        # User A is denied downloading Batch B (403 Forbidden)
+        export_b_denied = self.client.get(f"/api/export-csv/{batch_b.batch_id}/")
+        self.assertEqual(export_b_denied.status_code, 403)
+        self.assertEqual(export_b_denied.json().get("code"), "permission_denied")
+
+        # 2. Log in as user_b
+        self.client.force_login(user_b)
+        resp_b = self.client.get("/api/completed-batches/")
+        self.assertEqual(resp_b.status_code, 200)
+        batch_ids_b = [b["batch_id"] for b in resp_b.json()["batches"]]
+        self.assertIn(str(batch_b.batch_id), batch_ids_b)
+        self.assertNotIn(str(batch_a.batch_id), batch_ids_b)
+
 
 
 

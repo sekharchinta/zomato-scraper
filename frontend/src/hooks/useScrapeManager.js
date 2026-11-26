@@ -51,7 +51,7 @@ export function useScrapeManager({ onStatsRefresh }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTerminating, setIsTerminating] = useState(false);
 
-  const autoDownloadedBatches = useRef(new Set());
+  const completedNotifiedBatches = useRef(new Set());
   const pollTimerRef = useRef(null);
   const isInspectingHistoryRef = useRef(false);
   const currentRequestIdRef = useRef(currentRequestId);
@@ -367,9 +367,9 @@ export function useScrapeManager({ onStatsRefresh }) {
 
           fetchCompletedBatches(data);
 
-          if (!autoDownloadedBatches.current.has(reqId)) {
-            autoDownloadedBatches.current.add(reqId);
-            triggerAutoCsvDownload(reqId, data.fields_selected);
+          if (!completedNotifiedBatches.current.has(reqId)) {
+            completedNotifiedBatches.current.add(reqId);
+            showToast(`✓ Extraction completed for ${data.city} (${data.location})! Click "Export CSV" to download records.`, 'success', 6000);
           }
 
           // Advance to next request after settle
