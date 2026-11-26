@@ -242,26 +242,31 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
     """
     Returns live progress bar, active running status, and queued batches.
     Supports special keyword 'active' to dynamically locate the currently running batch.
+    Strictly isolated per-user: users only see their own active, queued, and completed batches.
     """
+    user = getattr(request, "user", None)
+    is_authenticated = user and user.is_authenticated
+    is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    user_q = (models.Q(user=user) | models.Q(user__isnull=True)) if (is_authenticated and not is_staff) else models.Q()
+
     req = None
     if request_id == "active":
-        # Look for currently running/processing batch first
+        # Look for currently running/processing batch first for THIS user
         req = ScrapeBatch.objects.filter(
-            status__in=["extracting_urls", "processing_restaurants", "fetching_details"]
+            models.Q(status__in=["extracting_urls", "processing_restaurants", "fetching_details"]) & user_q
         ).order_by("-updated_at").first()
         if not req:
-            # Check if there are queued batches waiting: auto-start the earliest queued batch!
-            queued = ScrapeBatch.objects.filter(status__in=["queued", "pending"]).order_by("created_at").first()
+            # Check if there are queued batches waiting: auto-start the earliest queued batch for this user!
+            queued = ScrapeBatch.objects.filter(
+                models.Q(status__in=["queued", "pending"]) & user_q
+            ).order_by("created_at").first()
             if queued:
-                queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-                queue = django_rq.get_queue(queue_name)
-                clear_queue_with_delay(queue, queue_name, delay_seconds=5.0, force_wait=True)
                 start_queued_batch(queued)
                 queued.refresh_from_db()
                 req = queued
         if not req:
-            # Fallback to the latest batch overall
-            req = ScrapeBatch.objects.order_by("-updated_at").first()
+            # Fallback to the latest batch overall for this user
+            req = ScrapeBatch.objects.filter(user_q).order_by("-updated_at").first()
         if not req:
             return JsonResponse({"status": "error", "message": "No active batches found"}, status=404)
     else:
@@ -272,9 +277,9 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
                 req = ScrapeBatch.objects.get(batch_id=request_id)
             except Exception:
                 # Batch not found (e.g. deleted/cancelled or invalid ID).
-                # Provide currently running batch and queued batches so frontend can auto-recover seamlessly.
+                # Provide currently running batch and queued batches strictly for THIS user
                 running_batch = ScrapeBatch.objects.filter(
-                    status__in=["extracting_urls", "processing_restaurants", "fetching_details"]
+                    models.Q(status__in=["extracting_urls", "processing_restaurants", "fetching_details"]) & user_q
                 ).order_by("-updated_at").first()
                 running_batch_info = None
                 if running_batch:
@@ -290,7 +295,9 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
                         "failed_jobs": running_batch.failed_jobs,
                         "elapsed_seconds": get_batch_elapsed_seconds(running_batch),
                     }
-                queued_qs = ScrapeBatch.objects.filter(status__in=["queued", "pending"]).order_by("created_at")
+                queued_qs = ScrapeBatch.objects.filter(
+                    models.Q(status__in=["queued", "pending"]) & user_q
+                ).order_by("created_at")
                 queued_batches = [
                     {
                         "batch_id": str(b.batch_id),
@@ -311,15 +318,19 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
                     "queued_batches": queued_batches,
                 }, status=404)
 
-    # If the requested batch is queued, check if there is an active running batch:
-    # If NO other batch is running, automatically kick off execution for this queued batch!
+        # STRICT MULTI-TENANT ISOLATION:
+        # Reject cross-user access if this batch belongs to another user
+        if req.user and is_authenticated and not is_staff and req.user != user:
+            return JsonResponse({
+                "status": "error",
+                "code": "permission_denied",
+                "message": "Permission denied: You cannot view status of another user's extraction batch."
+            }, status=403)
+
+    # In parallel multi-user mode: auto-start this batch immediately without sequential holding
     if req.status in ["queued", "pending"]:
-        has_running = ScrapeBatch.objects.filter(
-            status__in=["extracting_urls", "processing_restaurants", "fetching_details"]
-        ).exclude(batch_id=req.batch_id).exists()
-        if not has_running:
-            start_queued_batch(req)
-            req.refresh_from_db()
+        start_queued_batch(req)
+        req.refresh_from_db()
 
     # Safety check: if all jobs for this batch are finished, ensure status is completed
     if (
@@ -336,9 +347,9 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
     # Compute live elapsed seconds
     elapsed = get_batch_elapsed_seconds(req)
 
-    # Look up any queued batches in PostgreSQL waiting to be processed
+    # Look up any queued batches in PostgreSQL waiting to be processed (user-scoped)
     queued_qs = ScrapeBatch.objects.filter(
-        status__in=["queued", "pending"]
+        models.Q(status__in=["queued", "pending"]) & user_q
     ).order_by("created_at")
     queued_batches = [
         {
@@ -355,23 +366,10 @@ def scrape_status_api(request: HttpRequest, request_id: str) -> JsonResponse:
         if str(b.batch_id) != str(req.batch_id)
     ]
 
-    # Look up currently running/processing batch in PostgreSQL
+    # Look up currently running/processing batch in PostgreSQL for THIS user
     running_batch = ScrapeBatch.objects.filter(
-        status__in=["extracting_urls", "processing_restaurants", "fetching_details"]
+        models.Q(status__in=["extracting_urls", "processing_restaurants", "fetching_details"]) & user_q
     ).order_by("-updated_at").first()
-
-    # If NO batch is running, and there is a queued batch waiting:
-    if not running_batch:
-        queued = ScrapeBatch.objects.filter(status__in=["queued", "pending"]).order_by("created_at").first()
-        if queued:
-            logger.info("[STATUS_API] No active running batch. Auto-starting queued batch %s (%s, %s)...",
-                        queued.batch_id, queued.city, queued.location)
-            queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-            queue = django_rq.get_queue(queue_name)
-            clear_queue_with_delay(queue, queue_name, delay_seconds=5.0, force_wait=True)
-            start_queued_batch(queued)
-            queued.refresh_from_db()
-            running_batch = queued
 
     running_batch_info = None
     if running_batch:
@@ -480,6 +478,17 @@ def get_scrape_data_api(request: HttpRequest, request_id: str) -> JsonResponse:
             req = ScrapeBatch.objects.get(batch_id=request_id)
         except Exception:
             return JsonResponse({"status": "error", "message": "Request ID not found"}, status=404)
+
+    # STRICT MULTI-TENANT ISOLATION:
+    user = getattr(request, "user", None)
+    is_authenticated = user and user.is_authenticated
+    is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    if req.user and is_authenticated and not is_staff and req.user != user:
+        return JsonResponse({
+            "status": "error",
+            "code": "permission_denied",
+            "message": "Permission denied: You cannot view data from another user's extraction batch."
+        }, status=403)
 
     # If the requested batch is still queued, viewing queued data is disabled
     if req.status in ["queued", "pending"]:
@@ -711,6 +720,17 @@ def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     if not req:
         return JsonResponse({"status": "error", "message": f"Request ID or Batch '{request_id}' not found."}, status=404)
 
+    # STRICT MULTI-TENANT ISOLATION:
+    user = getattr(request, "user", None)
+    is_authenticated = user and user.is_authenticated
+    is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    if req.user and is_authenticated and not is_staff and req.user != user:
+        return JsonResponse({
+            "status": "error",
+            "code": "permission_denied",
+            "message": "Permission denied: You cannot delete another user's extraction batch."
+        }, status=403)
+
     batch_id_str = str(req.batch_id)
     city = req.city
     location = req.location
@@ -818,6 +838,17 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     if not req:
         return JsonResponse({"status": "error", "message": f"Request ID or Batch '{request_id}' not found."}, status=404)
 
+    # STRICT MULTI-TENANT ISOLATION:
+    user = getattr(request, "user", None)
+    is_authenticated = user and user.is_authenticated
+    is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    if req.user and is_authenticated and not is_staff and req.user != user:
+        return JsonResponse({
+            "status": "error",
+            "code": "permission_denied",
+            "message": "Permission denied: You cannot terminate another user's extraction batch."
+        }, status=403)
+
     batch_id_str = str(req.batch_id)
     city = req.city
     location = req.location
@@ -825,17 +856,36 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     # Mark remaining pending/in-flight RestaurantJob records as 'terminated' in PostgreSQL
     RestaurantJob.objects.filter(batch=req).exclude(stage="completed").update(stage="terminated")
 
-    # Complete/terminate batch in PostgreSQL, empty Redis queue, wait 5 seconds,
-    # and automatically advance to the next queued request in PostgreSQL!
+    # Cancel RQ jobs belonging ONLY to this batch in Redis (preserving other users' jobs)
+    try:
+        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+        queue = django_rq.get_queue(queue_name)
+        job_rq_ids = list(RestaurantJob.objects.filter(batch=req).exclude(rq_job_id="").values_list("rq_job_id", flat=True))
+        for jid in job_rq_ids:
+            try:
+                rq_j = Job.fetch(jid, connection=queue.connection)
+                if rq_j:
+                    rq_j.cancel()
+                    rq_j.delete()
+            except Exception:
+                pass
+        for q_job in queue.jobs:
+            b_id = q_job.kwargs.get("batch_id")
+            if b_id and str(b_id) == batch_id_str:
+                q_job.cancel()
+                q_job.delete()
+    except Exception as q_err:
+        logger.warning("Error cancelling queue jobs on terminate for batch %s: %s", batch_id_str, q_err)
+
+    # Complete/terminate batch in PostgreSQL without wiping other users' queue
     next_batch = complete_or_terminate_batch_and_advance(
         batch=req,
         status="terminated",
         error_message="Process terminated by user.",
-        delay_seconds=5.0,
     )
 
     next_batch_info = None
-    if next_batch:
+    if next_batch and next_batch.requestid != req.requestid:
         next_batch_info = {
             "batch_id": str(next_batch.batch_id),
             "request_id": next_batch.request_id,
@@ -845,7 +895,7 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
         }
 
     logger.info(
-        "Successfully terminated batch %s (%s, %s). Redis queue emptied, 5s settle wait complete. Next batch: %s",
+        "Successfully terminated batch %s (%s, %s). Jobs cancelled in Redis. Next batch: %s",
         batch_id_str,
         city,
         location,
@@ -854,7 +904,7 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
 
     return JsonResponse({
         "status": "success",
-        "message": f"Successfully terminated scrape process for {city} ({location}). Redis queue emptied. Partial data retained in database.",
+        "message": f"Successfully terminated scrape process for {city} ({location}). Partial data retained in database.",
         "batch_id": batch_id_str,
         "batch_status": "terminated",
         "city": city,
@@ -868,6 +918,26 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
 @require_http_methods(["POST"])
 def start_queued_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
     """Explicitly triggers execution of a queued batch in Redis and PostgreSQL."""
-    res = start_queued_batch(request_id)
+    clean_id = str(request_id or "").strip()
+    try:
+        req = ScrapeBatch.objects.get(request_id=clean_id)
+    except ScrapeBatch.DoesNotExist:
+        try:
+            req = ScrapeBatch.objects.get(batch_id=uuid.UUID(clean_id) if len(clean_id) == 36 else clean_id)
+        except Exception:
+            return JsonResponse({"status": "error", "message": f"Request ID or Batch '{request_id}' not found."}, status=404)
+
+    # STRICT MULTI-TENANT ISOLATION:
+    user = getattr(request, "user", None)
+    is_authenticated = user and user.is_authenticated
+    is_staff = is_authenticated and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    if req.user and is_authenticated and not is_staff and req.user != user:
+        return JsonResponse({
+            "status": "error",
+            "code": "permission_denied",
+            "message": "Permission denied: You cannot start another user's extraction batch."
+        }, status=403)
+
+    res = start_queued_batch(req)
     status_code = 200 if res.get("status") in ["success", "already_finished", "already_running"] else 400
     return JsonResponse(res, status=status_code)

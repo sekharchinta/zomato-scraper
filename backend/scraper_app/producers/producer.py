@@ -377,7 +377,8 @@ def dispatch_scrape_request(
 
     # Case A: Direct restaurant URL scraping
     if rest_url_str:
-        clear_queue_with_delay(queue, queue_name, delay_seconds=5.0)
+        if clear_queue or not user:
+            clear_queue_with_delay(queue, queue_name, delay_seconds=5.0)
         from scraper_app.tasks.restaurant_extractor import process_restaurant_pipeline_job
 
         job_record = RestaurantJob.objects.create(
@@ -550,7 +551,11 @@ def complete_or_terminate_batch_and_advance(
     delay_seconds: float = 5.0,
     error_message: str = "",
 ) -> Optional[ScrapeBatch]:
-    """Finishes the batch, clears the queue, and advances to the next queued batch."""
+    """
+    Finishes the batch in PostgreSQL and advances any queued batches.
+    In true parallel multi-user architecture, it does NOT clear the shared Redis queue,
+    ensuring other users' concurrent jobs continue processing uninterrupted.
+    """
     batch.refresh_from_db()
     batch.status = status
     if status == "completed":
@@ -561,16 +566,13 @@ def complete_or_terminate_batch_and_advance(
         batch.error_message = error_message
     batch.save(update_fields=["status", "progress", "completed_at", "error_message", "updated_at"])
 
-    queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-    queue = django_rq.get_queue(queue_name)
-    clear_queue_with_delay(queue, queue_name, delay_seconds=delay_seconds, force_wait=True)
-
+    # Auto-start any queued batch waiting without purging the queue
     next_batch = ScrapeBatch.objects.filter(
         status__in=["queued", "pending"]
     ).exclude(requestid=batch.requestid).order_by("created_at").first()
 
     if next_batch:
-        logger.info("[PRODUCER] Starting next queued batch %s (%s, %s)...", next_batch.requestid, next_batch.city, next_batch.location)
+        logger.info("[PRODUCER] Auto-starting queued batch %s (%s, %s)...", next_batch.requestid, next_batch.city, next_batch.location)
         start_queued_batch(next_batch)
         next_batch.refresh_from_db()
         return next_batch

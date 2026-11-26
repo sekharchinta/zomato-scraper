@@ -183,7 +183,27 @@ def run_concurrency_demo():
     assert hack_attempt.status_code == 403, f"SECURITY VIOLATION: Expected 403, got {hack_attempt.status_code}!"
     print("  ✓ Access Denied (HTTP 403): User A blocked from downloading User B's CSV.")
 
-    # 3. User B downloads their own batch CSV
+    # 3. User A attempts to view User B's scrape status
+    print(f"\n  Security Test: User A attempting to view User B's batch status ({comp_batch_b.batch_id})...")
+    status_hack = client_a.get(f"/api/scrape-status/{comp_batch_b.batch_id}/")
+    assert status_hack.status_code == 403, f"SECURITY VIOLATION: Expected 403, got {status_hack.status_code}!"
+    print("  ✓ Access Denied (HTTP 403): User A blocked from viewing User B's batch status.")
+
+    # 4. User A attempts to view User B's extracted restaurant data
+    print(f"\n  Security Test: User A attempting to view User B's extracted data ({comp_batch_b.batch_id})...")
+    data_hack = client_a.get(f"/api/scrape-data/{comp_batch_b.batch_id}/")
+    assert data_hack.status_code == 403, f"SECURITY VIOLATION: Expected 403, got {data_hack.status_code}!"
+    print("  ✓ Access Denied (HTTP 403): User A blocked from viewing User B's extracted data.")
+
+    # 5. User A attempts to terminate or delete User B's batch
+    print(f"\n  Security Test: User A attempting to terminate/delete User B's batch ({comp_batch_b.batch_id})...")
+    term_hack = client_a.post(f"/api/terminate-batch/{comp_batch_b.batch_id}/")
+    assert term_hack.status_code == 403, f"SECURITY VIOLATION: Expected 403, got {term_hack.status_code}!"
+    del_hack = client_a.delete(f"/api/delete-batch/{comp_batch_b.batch_id}/")
+    assert del_hack.status_code == 403, f"SECURITY VIOLATION: Expected 403, got {del_hack.status_code}!"
+    print("  ✓ Access Denied (HTTP 403): User A blocked from terminating or deleting User B's batch.")
+
+    # 6. User B downloads their own batch CSV
     print(f"\n  Legitimate Test: User B downloading their own batch ({comp_batch_b.batch_id})...")
     legit_download = client_b.get(f"/api/export-csv/{comp_batch_b.batch_id}/")
     assert legit_download.status_code == 200, f"Expected 200, got {legit_download.status_code}"

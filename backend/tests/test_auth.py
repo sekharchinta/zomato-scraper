@@ -283,6 +283,85 @@ class GoogleAuthTestCase(TestCase):
         self.assertEqual(b1.city, "Hyderabad")
         self.assertEqual(b2.city, "Bengaluru")
 
+    def test_multiuser_dashboard_apis_strict_isolation(self):
+        """
+        Verifies that all dashboard endpoints strictly enforce multi-tenant isolation:
+        User A cannot view status, data, terminate, or delete User B's batch (HTTP 403).
+        """
+        from scraper_app.models import ScrapeBatch
+
+        user_a = User.objects.create(username="iso_a", email="iso_a@example.com")
+        user_b = User.objects.create(username="iso_b", email="iso_b@example.com")
+
+        batch_a = ScrapeBatch.objects.create(
+            user=user_a,
+            city="Hyderabad",
+            location="Banjara Hills",
+            status="processing_restaurants",
+            progress=50,
+        )
+        batch_b = ScrapeBatch.objects.create(
+            user=user_b,
+            city="Bengaluru",
+            location="Indiranagar",
+            status="processing_restaurants",
+            progress=40,
+        )
+
+        client_a = Client()
+        client_a.force_login(user_a)
+        client_b = Client()
+        client_b.force_login(user_b)
+
+        # 1. Scrape Status Isolation
+        # User A accessing Batch B's status -> 403 Forbidden
+        status_denied = client_a.get(f"/api/scrape-status/{batch_b.batch_id}/")
+        self.assertEqual(status_denied.status_code, 403)
+        self.assertEqual(status_denied.json().get("code"), "permission_denied")
+
+        # User A accessing own Batch A's status -> 200 OK
+        status_ok = client_a.get(f"/api/scrape-status/{batch_a.batch_id}/")
+        self.assertEqual(status_ok.status_code, 200)
+        self.assertEqual(status_ok.json().get("request_id"), str(batch_a.batch_id))
+
+        # 2. Active Status Isolation
+        # User A requesting "active" batch only receives Batch A
+        active_a = client_a.get("/api/scrape-status/active/")
+        self.assertEqual(active_a.status_code, 200)
+        self.assertEqual(active_a.json().get("request_id"), str(batch_a.batch_id))
+
+        # User B requesting "active" batch only receives Batch B
+        active_b = client_b.get("/api/scrape-status/active/")
+        self.assertEqual(active_b.status_code, 200)
+        self.assertEqual(active_b.json().get("request_id"), str(batch_b.batch_id))
+
+        # 3. Scrape Data Isolation
+        # User A accessing Batch B's data -> 403 Forbidden
+        data_denied = client_a.get(f"/api/scrape-data/{batch_b.batch_id}/")
+        self.assertEqual(data_denied.status_code, 403)
+        self.assertEqual(data_denied.json().get("code"), "permission_denied")
+
+        # User B accessing own Batch B's data -> 200 OK
+        data_ok = client_b.get(f"/api/scrape-data/{batch_b.batch_id}/")
+        self.assertEqual(data_ok.status_code, 200)
+
+        # 4. Terminate Batch Isolation
+        # User A attempting to terminate Batch B -> 403 Forbidden
+        term_denied = client_a.post(f"/api/terminate-batch/{batch_b.batch_id}/")
+        self.assertEqual(term_denied.status_code, 403)
+        self.assertEqual(term_denied.json().get("code"), "permission_denied")
+
+        # 5. Delete Batch Isolation
+        # User A attempting to delete Batch B -> 403 Forbidden
+        del_denied = client_a.delete(f"/api/delete-batch/{batch_b.batch_id}/")
+        self.assertEqual(del_denied.status_code, 403)
+        self.assertEqual(del_denied.json().get("code"), "permission_denied")
+
+        # Verify Batch B was NOT modified or deleted by User A's attempts
+        batch_b.refresh_from_db()
+        self.assertEqual(batch_b.status, "processing_restaurants")
+
+
 
 
 
