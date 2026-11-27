@@ -626,6 +626,23 @@ def start_queued_batch(queued_batch: Any) -> Dict[str, Any]:
             queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
             queue = django_rq.get_queue(queue_name)
 
+        # Guard 4: Avoid double-enqueuing extract_urls_from_latlongs if already queued or started in Redis
+        batch_id_str = str(queued_batch.requestid)
+        try:
+            from rq.registry import StartedJobRegistry
+            existing_job_ids = list(queue.get_job_ids()) + list(StartedJobRegistry(queue=queue).get_job_ids())
+            for existing_jid in existing_job_ids:
+                existing_job = Job.fetch(existing_jid, connection=queue.connection)
+                if existing_job and str((existing_job.kwargs or {}).get("batch_id") or "") == batch_id_str:
+                    return {
+                        "status": "success",
+                        "message": f"Batch {batch_id_str} already enqueued in '{queue_name}'",
+                        "batch_id": batch_id_str,
+                        "rq_job_id": existing_job.id,
+                    }
+        except Exception:
+            pass
+
         from scraper_app.tasks.url_extractor import extract_urls_from_latlongs
         rq_job = queue.enqueue(
             extract_urls_from_latlongs,

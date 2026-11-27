@@ -310,5 +310,65 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         self.assertFalse(self.conn.exists(q_b.key))
         self.assertNotIn(q_a.name, FairQueue.get_active_user_queues(self.conn))
         self.assertNotIn(q_b.name, FairQueue.get_active_user_queues(self.conn))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.key))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_b.key))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.name))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_b.name))
+
+    def test_06_rq_dashboard_keys_live_worker_survival_and_no_double_enqueue(self):
+        """
+        Verifies:
+        1. rq:queues stores valid 'rq:queue:<name>' keys so rq.Queue.all() / rq-dashboard never crash with 500.
+        2. FairQueue.dequeue_any(..., timeout=5) raises DequeueTimeout so burst=False live workers stay alive >2s.
+        3. start_queued_batch does not double-enqueue extract_urls_from_latlongs after dispatch_scrape_request.
+        """
+        from rq import Queue
+        from rq.exceptions import DequeueTimeout
+        from scraper_app.producers.producer import dispatch_scrape_request, start_queued_batch
+        from scraper_app.workers.worker import UserWorkerPool
+
+        # 1. Dispatch request and verify start_queued_batch does not double-enqueue
+        res = dispatch_scrape_request(
+            city="Hyderabad",
+            location_raw="Banjara Hills",
+            user=self.user_a,
+        )
+        batch = ScrapeBatch.objects.get(batch_id=res["batch_id"])
+        q_a = FairQueue.for_user(self.user_a, connection=self.conn, isolated=True)
+        self.assertEqual(q_a.count, 1)
+
+        dup_res = start_queued_batch(batch)
+        self.assertEqual(dup_res["status"], "success")
+        self.assertEqual(q_a.count, 1)  # Must still be 1 job, NOT 2!
+
+        # 2. Verify rq:queues has valid 'rq:queue:...' key so rq.Queue.all() succeeds (no ValueError/500)
+        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.key))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.name))
+        # Clean any stale non-prefixed keys and verify Queue.all()
+        for qb in self.conn.smembers(GLOBAL_QUEUES_KEY):
+            s = qb.decode("utf-8") if isinstance(qb, bytes) else str(qb)
+            if not s.startswith("rq:queue:"):
+                self.conn.srem(GLOBAL_QUEUES_KEY, qb)
+        all_queues = Queue.all(connection=self.conn)
+        self.assertTrue(any(q.name == q_a.name for q in all_queues))
+
+        # 3. Verify DequeueTimeout raised when isolated queue is empty with timeout > 0
+        q_b_empty = FairQueue.for_user(self.user_b, connection=self.conn, isolated=True)
+        with self.assertRaises(DequeueTimeout):
+            FairQueue.dequeue_any([q_b_empty], timeout=5, connection=self.conn)
+
+        # 4. Verify live burst=False worker stays alive for >2s when idle and executes jobs arriving later
+        pool_b = UserWorkerPool(queue_name=q_b_empty.name, num_workers=1, burst=False, isolated=True)
+        try:
+            pool_b.start()
+            time.sleep(2.2)
+            self.assertEqual(pool_b.active_worker_count(), 1, "Live burst=False worker exited prematurely!")
+
+            q_b_empty.enqueue(concurrent_worker_pid_task, "test:iso:results_b", "LIVE")
+            deadline = time.time() + 5.0
+            while time.time() < deadline and self.conn.llen("test:iso:results_b") == 0:
+                time.sleep(0.1)
+            self.assertEqual(self.conn.llen("test:iso:results_b"), 1)
+        finally:
+            pool_b.shutdown(cleanup_queue=True, connection=self.conn)
+

@@ -9,7 +9,12 @@ Subclasses DjangoRQ to support:
 2. Shared Fair Round-Robin Dispatch (`isolated=False`):
    Shared/legacy workers rotate across 'rq:active_user_queues' via RPOPLPUSH in O(1) time
    using LUA_DYNAMIC_PER_USER_FAIR_DEQUEUE and auto-clean empty user queues.
-3. Instant Wake-Up Signaling:
+3. RQ Dashboard & Worker Loop Compliance:
+   - Always registers `self.key` ('rq:queue:<name>') in 'rq:queues' so rq-dashboard
+     and rq.Queue.all() work without ValueError / HTTP 500.
+   - Raises `DequeueTimeout` when `timeout > 0` in continuous (`burst=False`) worker mode
+     so RQ workers maintain heartbeat and keep listening instead of exiting after 1s.
+4. Instant Wake-Up Signaling:
    Publishes queue activation events to 'rq:user_queue_events' so the
    MultiUserWorkerSupervisor can dynamically spawn dedicated workers for new users (<50ms).
 """
@@ -20,6 +25,7 @@ from typing import Any, Iterable, List, Optional, Tuple, Type
 from django.conf import settings
 from django_rq.queues import DjangoRQ
 from redis import Redis
+from rq.exceptions import DequeueTimeout
 from rq.job import Job, JobStatus
 from rq.utils import as_text
 
@@ -93,7 +99,7 @@ if num_users > 0 then
             if rem_prio == 0 and rem_batches == 0 then
                 redis.call('LREM', KEYS[1], 0, q_name)
                 if q_name ~= "zomato" then
-                    redis.call('SREM', KEYS[2], q_name)
+                    redis.call('SREM', KEYS[2], q_key, q_name)
                     redis.call('DEL', q_key, batches_key)
                 end
             end
@@ -119,7 +125,7 @@ if num_users > 0 then
                     if rem_prio == 0 and rem_b == 0 then
                         redis.call('LREM', KEYS[1], 0, q_name)
                         if q_name ~= "zomato" then
-                            redis.call('SREM', KEYS[2], q_name)
+                            redis.call('SREM', KEYS[2], q_key, q_name)
                             redis.call('DEL', q_key, batches_key)
                         end
                     end
@@ -139,7 +145,7 @@ if num_users > 0 then
             -- Auto-cleanup user queue when all jobs are completed!
             redis.call('LREM', KEYS[1], 0, q_name)
             if q_name ~= "zomato" then
-                redis.call('SREM', KEYS[2], q_name)
+                redis.call('SREM', KEYS[2], q_key, q_name)
                 redis.call('DEL', q_key, batches_key)
             end
         end
@@ -254,7 +260,7 @@ class FairQueue(DjangoRQ):
         pipe = connection.pipeline()
         pipe.lrem(ACTIVE_USERS_KEY, 0, q_name)
         if q_name != "zomato":
-            pipe.srem(GLOBAL_QUEUES_KEY, q_name)
+            pipe.srem(GLOBAL_QUEUES_KEY, q_key, q_name)
         if keys_to_del:
             pipe.delete(*keys_to_del)
         pipe.execute()
@@ -283,7 +289,7 @@ class FairQueue(DjangoRQ):
             if rem_prio == 0 and rem_batches == 0:
                 pipe2 = connection.pipeline()
                 pipe2.lrem(ACTIVE_USERS_KEY, 0, q_name)
-                pipe2.srem(GLOBAL_QUEUES_KEY, q_name)
+                pipe2.srem(GLOBAL_QUEUES_KEY, q_key, q_name)
                 pipe2.delete(q_key, batches_key)
                 pipe2.execute()
                 logger.info("[FAIR_QUEUE] User queue '%s' auto-cleaned after batch removal.", q_name)
@@ -303,6 +309,8 @@ class FairQueue(DjangoRQ):
         - When any queue in `queues` has `isolated=True` (dedicated UserWorkerPool workers),
           pops strictly from those assigned queues ONLY (never touching other users).
         - Otherwise, runs the global fair round-robin Lua script across active user queues.
+        - In continuous mode (`timeout > 0`), blocks up to 1s per cycle and raises
+          `DequeueTimeout` on empty timeout so RQ keeps heartbeat alive instead of quitting.
         """
         queue_list = list(queues) if queues else []
         if queue_list and any(getattr(q, "isolated", False) for q in queue_list):
@@ -328,9 +336,9 @@ class FairQueue(DjangoRQ):
                         job_obj, fetched_q = res
                         return job_obj, cls.resolve_queue(fetched_q.name, connection=connection, isolated=True)
 
-            if timeout and timeout > 0:
+            if timeout is not None and timeout > 0:
                 keys_to_wait = [q.key for q in queue_list]
-                blpop_res = connection.blpop(keys_to_wait, timeout=min(int(timeout), 1))
+                blpop_res = connection.blpop(keys_to_wait, timeout=1)
                 if blpop_res:
                     q_k, j_id = map(as_text, blpop_res)
                     res = cls._fetch_dequeued_job(
@@ -344,6 +352,7 @@ class FairQueue(DjangoRQ):
                     if res:
                         job_obj, fetched_q = res
                         return job_obj, cls.resolve_queue(fetched_q.name, connection=connection, isolated=True)
+                raise DequeueTimeout(timeout, keys_to_wait)
             return None
 
         raw_result = connection.eval(
@@ -366,9 +375,9 @@ class FairQueue(DjangoRQ):
                 death_penalty_class=death_penalty_class,
             )
 
-        # When queue is completely empty, use BLPOP with timeout on fallback queue to prevent CPU spinning
-        if timeout and timeout > 0:
-            blpop_res = connection.blpop([FALLBACK_QUEUE_KEY], timeout=min(int(timeout), 1))
+        # When queue is completely empty in continuous mode, wait briefly then raise DequeueTimeout
+        if timeout is not None and timeout > 0:
+            blpop_res = connection.blpop([FALLBACK_QUEUE_KEY], timeout=1)
             if blpop_res:
                 q_k, j_id = map(as_text, blpop_res)
                 return cls._fetch_dequeued_job(
@@ -379,6 +388,7 @@ class FairQueue(DjangoRQ):
                     serializer=serializer,
                     death_penalty_class=death_penalty_class,
                 )
+            raise DequeueTimeout(timeout, [FALLBACK_QUEUE_KEY])
 
         return None
 
@@ -395,7 +405,7 @@ class FairQueue(DjangoRQ):
         pipe = pipeline if pipeline is not None else self.connection.pipeline()
         pipe.lrem(ACTIVE_USERS_KEY, 0, self.name)
         pipe.rpush(ACTIVE_USERS_KEY, self.name)
-        pipe.sadd(self.redis_queues_keys, self.name)
+        pipe.sadd(self.redis_queues_keys, self.key)
 
         if at_front:
             pipe.lpush(self.key, job_id)
@@ -424,10 +434,10 @@ class FairQueue(DjangoRQ):
         job_datas_list = list(job_datas)
         pipe = pipeline if pipeline is not None else self.connection.pipeline()
 
-        # Register queue in active list and RQ global queues set
+        # Register queue in active list and RQ global queues set (using self.key 'rq:queue:<name>')
         pipe.lrem(ACTIVE_USERS_KEY, 0, self.name)
         pipe.rpush(ACTIVE_USERS_KEY, self.name)
-        pipe.sadd(self.redis_queues_keys, self.name)
+        pipe.sadd(self.redis_queues_keys, self.key)
 
         batches_key = f"{self.key}:batches"
         created_jobs: List[Job] = []
@@ -520,5 +530,5 @@ class FairQueue(DjangoRQ):
         pipe.delete(batches_key)
         pipe.lrem(ACTIVE_USERS_KEY, 0, self.name)
         if self.name != "zomato":
-            pipe.srem(GLOBAL_QUEUES_KEY, self.name)
+            pipe.srem(GLOBAL_QUEUES_KEY, self.key, self.name)
         pipe.execute()

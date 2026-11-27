@@ -83,10 +83,11 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         job_a1 = queue_a.enqueue(dummy_job_func, 10)
         self.assertIsNotNone(job_a1)
 
-        # Verify User A is registered in active user queues list and global queues set
+        # Verify User A is registered in active user queues list and global queues set (with rq:queue: key prefix)
         active_users = FairQueue.get_active_user_queues(self.conn)
         self.assertIn(queue_a.name, active_users)
-        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.name))
+        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.key))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.name))
 
         # Enqueue priority job for User B
         queue_b = FairQueue.for_user(self.user_b, connection=self.conn)
@@ -225,9 +226,10 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         self.assertEqual(res["status"], "queued")
         self.assertEqual(res["queue"], expected_queue_name)
 
-        # Verify User A's dedicated queue is registered in Redis and RQ Dashboard
+        # Verify User A's dedicated queue is registered in Redis and RQ Dashboard (with rq:queue: prefix)
         self.assertIn(expected_queue_name, FairQueue.get_active_user_queues(self.conn))
-        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, expected_queue_name))
+        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, f"rq:queue:{expected_queue_name}"))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, expected_queue_name))
 
         batch = ScrapeBatch.objects.get(batch_id=res["batch_id"])
         self.assertEqual(batch.user, self.user_a)
@@ -252,5 +254,6 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         self.assertFalse(self.conn.exists(queue_a.key))
         self.assertFalse(self.conn.exists(f"{queue_a.key}:batches"))
         self.assertNotIn(expected_queue_name, FairQueue.get_active_user_queues(self.conn))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, f"rq:queue:{expected_queue_name}"))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, expected_queue_name))
 

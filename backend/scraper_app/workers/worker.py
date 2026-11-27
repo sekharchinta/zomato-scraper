@@ -331,7 +331,7 @@ class MultiUserWorkerSupervisor:
         return self.lock.acquire()
 
     def cleanup_stale_workers(self) -> None:
-        """Removes dead worker registrations while preserving active per-user queues."""
+        """Removes dead worker registrations and repairs rq:queues keys while preserving active user queues."""
         try:
             conn = django_rq.get_connection("zomato")
             for w in Worker.all(connection=conn):
@@ -340,7 +340,12 @@ class MultiUserWorkerSupervisor:
                         w.register_death()
                     except Exception:
                         pass
-            conn.sadd(GLOBAL_QUEUES_KEY, self.queue_name)
+            # Repair any invalid keys in rq:queues lacking 'rq:queue:' prefix (prevents rq-dashboard 500)
+            for qb in conn.smembers(GLOBAL_QUEUES_KEY):
+                q_str = qb.decode("utf-8") if isinstance(qb, bytes) else str(qb)
+                if not q_str.startswith("rq:queue:"):
+                    conn.srem(GLOBAL_QUEUES_KEY, qb)
+            conn.sadd(GLOBAL_QUEUES_KEY, f"rq:queue:{self.queue_name}")
         except Exception as exc:
             logger.warning("[WORKER_SUPERVISOR] Notice during stale worker cleanup: %s", exc)
 
