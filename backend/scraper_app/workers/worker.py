@@ -417,6 +417,26 @@ class MultiUserWorkerSupervisor:
         cleaned: List[str] = []
 
         if not self.single_queue_only:
+            # Guard against invalid unprefixed keys in rq:queues & stale empty user queues
+            try:
+                for qb in list(conn.smembers(GLOBAL_QUEUES_KEY)):
+                    q_str = qb.decode("utf-8") if isinstance(qb, bytes) else str(qb)
+                    if not q_str.startswith("rq:queue:"):
+                        conn.srem(GLOBAL_QUEUES_KEY, qb)
+                        continue
+                    clean_q = q_str.replace("rq:queue:", "", 1)
+                    if clean_q.startswith("user_") and clean_q not in self.user_pools:
+                        q_check = FairQueue.resolve_queue(clean_q, connection=conn, isolated=True)
+                        if (
+                            q_check.count == 0
+                            and StartedJobRegistry(queue=q_check).count == 0
+                            and FailedJobRegistry(queue=q_check).count == 0
+                        ):
+                            FairQueue.delete_user_queue(conn, clean_q)
+                            cleaned.append(clean_q)
+            except Exception:
+                pass
+
             event_queues = self._drain_pubsub_events()
             active_queues = self._discover_active_user_queues(conn)
             for eq in event_queues:

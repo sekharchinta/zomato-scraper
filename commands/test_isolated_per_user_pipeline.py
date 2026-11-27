@@ -352,6 +352,13 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         all_queues = Queue.all(connection=self.conn)
         self.assertTrue(any(q.name == q_a.name for q in all_queues))
 
+        # 2b. Verify supervisor reconcile_user_pools auto-cleans malformed unprefixed keys & empty user queues
+        self.conn.sadd(GLOBAL_QUEUES_KEY, "user_858", "rq:queue:user_99998")
+        sup_clean = MultiUserWorkerSupervisor(workers=2, fallback_workers=0, burst=True)
+        sup_clean.reconcile_user_pools(check_db_active=False)
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "user_858"))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "rq:queue:user_99998"))
+
         # 3. Verify DequeueTimeout raised when isolated queue is empty with timeout > 0
         q_b_empty = FairQueue.for_user(self.user_b, connection=self.conn, isolated=True)
         with self.assertRaises(DequeueTimeout):

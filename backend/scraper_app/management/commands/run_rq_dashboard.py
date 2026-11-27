@@ -52,10 +52,14 @@ class Command(BaseCommand):
         self.stdout.write(self.style.NOTICE(f"Connecting to dedicated project Redis DB: {redis_url}"))
         self.stdout.write(self.style.NOTICE(f"Monitoring Single Queue: {queue_name}"))
 
-        # Pre-register single queue 'zomato' in Redis DB 1 so RQ Dashboard displays it immediately
+        # Pre-register single queue 'zomato' and clean any invalid unprefixed keys from rq:queues
         try:
             import django_rq
             conn = django_rq.get_connection(queue_name)
+            for qb in list(conn.smembers("rq:queues")):
+                q_str = qb.decode("utf-8") if isinstance(qb, bytes) else str(qb)
+                if not q_str.startswith("rq:queue:"):
+                    conn.srem("rq:queues", qb)
             conn.sadd("rq:queues", f"rq:queue:{queue_name}")
         except Exception:
             pass
