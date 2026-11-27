@@ -1,5 +1,5 @@
 """
-commands/test_frontend_dashboard_user_isolation.py
+tests/test_frontend_dashboard_user_isolation.py
 
 Automated Verification Suite for Frontend Dashboard User Authorization & Multi-Tenant Data Isolation.
 Verifies that:
@@ -11,19 +11,8 @@ Verifies that:
 6. /api/export-csv/<id>/ forbids unauthorized CSV exports.
 """
 
-import os
-import sys
 import uuid
 from typing import Tuple
-
-import django
-
-# Setup Django environment
-backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
-if backend_dir not in sys.path:
-    sys.path.insert(0, backend_dir)
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "zomato_scraper.settings")
-django.setup()
 
 from django.contrib.auth.models import User
 from django.test import Client, TestCase
@@ -252,12 +241,3 @@ class TestFrontendDashboardUserIsolation(TestCase):
         res_legacy = self.client_a.get(f"/api/export-csv/{self.legacy_batch_id}/")
         self.assertEqual(res_legacy.status_code, 403)
 
-
-if __name__ == "__main__":
-    from django.test.runner import DiscoverRunner
-
-    runner = DiscoverRunner(verbosity=2)
-    failures = runner.run_tests(["commands.test_frontend_dashboard_user_isolation"])
-    if failures:
-        sys.exit(1)
-    print("\n✓ ALL FRONTEND DASHBOARD USER ISOLATION TESTS PASSED (100% SUCCESS)!")

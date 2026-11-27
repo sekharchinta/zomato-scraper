@@ -17,7 +17,7 @@ from django.conf import settings
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.utils import timezone as dj_timezone
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 import django_rq
 from rq.job import Job
@@ -961,3 +961,13 @@ def start_queued_batch_api(request: HttpRequest, request_id: str) -> JsonRespons
     res = start_queued_batch(req)
     status_code = 200 if res.get("status") in ["success", "already_finished", "already_running"] else 400
     return JsonResponse(res, status=status_code)
+
+
+@ensure_csrf_cookie
+@require_GET
+def csrf_token_view(request: HttpRequest) -> JsonResponse:
+    """Issues a fresh CSRF cookie for SPA clients."""
+    return JsonResponse({
+        "status": "success",
+        "message": "CSRF cookie generated",
+    })

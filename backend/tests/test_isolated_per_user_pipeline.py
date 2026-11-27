@@ -1,5 +1,5 @@
 """
-commands/test_isolated_per_user_pipeline.py
+tests/test_isolated_per_user_pipeline.py
 
 End-to-End Verification for Isolated Per-User Concurrent Pipelines:
 1. UserProducer: Scoped batch dispatch, URL pushing, and user-isolated batch advancement.
@@ -63,6 +63,9 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         self._cleanup_redis()
 
     def _cleanup_redis(self):
+        if int(self.conn.connection_pool.connection_kwargs.get("db", 1)) != 1:
+            self.conn.flushdb()
+            return
         for uid in [getattr(getattr(self, "user_a", None), "id", None), getattr(getattr(self, "user_b", None), "id", None)]:
             if uid:
                 FairQueue.delete_user_queue(self.conn, uid)
@@ -350,11 +353,15 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         self.assertTrue(any(q.name == q_a.name for q in all_queues))
 
         # 2b. Verify supervisor reconcile_user_pools auto-cleans malformed unprefixed keys & empty user queues
+        FairQueue.delete_user_queue(self.conn, self.user_a.id)
         self.conn.sadd(GLOBAL_QUEUES_KEY, "user_858", "rq:queue:user_99998")
         sup_clean = MultiUserWorkerSupervisor(workers=2, fallback_workers=0, burst=True)
-        sup_clean.reconcile_user_pools(check_db_active=False)
-        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "user_858"))
-        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "rq:queue:user_99998"))
+        try:
+            sup_clean.reconcile_user_pools(check_db_active=False)
+            self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "user_858"))
+            self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "rq:queue:user_99998"))
+        finally:
+            sup_clean.shutdown()
 
         # 3. Verify DequeueTimeout raised when isolated queue is empty with timeout > 0
         q_b_empty = FairQueue.for_user(self.user_b, connection=self.conn, isolated=True)

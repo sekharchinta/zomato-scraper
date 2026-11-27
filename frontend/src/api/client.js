@@ -1,21 +1,55 @@
+
 /**
  * API client service for Zomato Scraper Django backend.
  */
 
 const API_BASE = '';
 
+/**
+ * Retrieves a cookie value by name.
+ * Used to retrieve Django's CSRF token.
+ */
+function getCookie(name) {
+  const cookies = document.cookie.split(';');
+
+  for (const cookie of cookies) {
+    const [key, ...value] = cookie.trim().split('=');
+
+    if (key === name) {
+      return decodeURIComponent(value.join('='));
+    }
+  }
+
+  return null;
+}
+
 async function fetchJson(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
+
+  // Attach CSRF token to unsafe HTTP methods
+  if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+    const csrfToken = getCookie('csrftoken');
+
+    if (csrfToken) {
+      headers['X-CSRFToken'] = csrfToken;
+    }
+  }
+
   const resp = await fetch(url, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
     ...options,
+    credentials: 'include',
+    headers,
   });
 
   const contentType = resp.headers.get('content-type') || '';
+
   let data = null;
+
   if (contentType.includes('application/json')) {
     data = await resp.json();
   }
@@ -136,7 +170,10 @@ export const api = {
    */
   async downloadCsvBlob(requestId, fields = [], fallbackFilename = null) {
     const url = this.getExportCsvUrl(requestId, fields);
-    const resp = await fetch(url);
+    const resp = await fetch(url, {
+      credentials: 'include',
+    });
+
     if (!resp.ok) {
       throw new Error(`Server returned HTTP ${resp.status} during CSV export`);
     }
@@ -150,6 +187,7 @@ export const api = {
         filename = match[1].trim();
       }
     }
+
     if (!filename) {
       filename = `zomato_export_${String(requestId).substring(0, 8)}.csv`;
     }
@@ -162,6 +200,7 @@ export const api = {
     link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
+
     setTimeout(() => {
       try {
         document.body.removeChild(link);
@@ -196,6 +235,9 @@ export const api = {
    */
   async getCurrentUser() {
     return fetchJson(`${API_BASE}/api/auth/me/`);
+  },
+  async initializeCsrf() {
+    return fetchJson(`${API_BASE}/api/csrf/`);
   },
 
   /**

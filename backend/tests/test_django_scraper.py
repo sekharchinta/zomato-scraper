@@ -282,7 +282,7 @@ class TestAPIsAndModels(TestCase):
         self.assertIn("total_batches", data["stats"])
 
     def test_isolated_queues_and_db_configuration(self):
-        """Verifies strictly ONE Redis queue ('zomato') is configured on Redis DB 1."""
+        """Verifies strictly ONE Redis queue ('zomato') is configured on the isolated Redis DB."""
         expected_queues = {"zomato"}
         self.assertEqual(set(settings.RQ_QUEUES.keys()), expected_queues)
         self.assertNotIn("default", settings.RQ_QUEUES)
@@ -290,8 +290,10 @@ class TestAPIsAndModels(TestCase):
         self.assertNotIn("locations_queue", settings.RQ_QUEUES)
         self.assertNotIn("restaurants_queue", settings.RQ_QUEUES)
         self.assertNotIn("reviews_queue", settings.RQ_QUEUES)
+        self.assertTrue(settings.IS_TESTING)
+        self.assertEqual(settings.REDIS_DB, 2)
         for q_name, q_cfg in settings.RQ_QUEUES.items():
-            self.assertEqual(q_cfg["DB"], 1)
+            self.assertEqual(q_cfg["DB"], settings.REDIS_DB)
 
     def test_generate_location_key(self):
         """Verifies deterministic unique key generation for PostgreSQL caching."""
@@ -941,18 +943,18 @@ class TestUrlExtractionAndSingleQueuePipeline(TestCase):
         self.assertEqual(jobs.count(), 2)
         self.assertEqual(jobs.first().restaurant_id, 1001)
 
-    @patch("scraper_app.producers.producer.ZomatoScraper")
+    @patch("scraper_app.tasks.location_extractor.ZomatoScraper")
     def test_resolve_locations_list_filters_highway_connector_routes(self, mock_scraper_cls):
         """Verifies resolve_locations_list filters out inter-city highway connector routes with ' - '."""
         from scraper_app.producers.producer import resolve_locations_list
 
         mock_inst = MagicMock()
         mock_inst.get_location_suggestions.return_value = [
-            {"entity_title": "Palakollu", "latitude": 16.518, "longitude": 81.725},
-            {"entity_title": "Palakollu Bypass Road", "latitude": 16.520, "longitude": 81.726},
-            {"entity_title": "Palakollu - Razole Road", "latitude": 16.462, "longitude": 81.817},
-            {"entity_title": "Palakollu - Valluru Road", "latitude": 16.515, "longitude": 81.736},
-            {"entity_title": "Brodipet", "latitude": 16.525, "longitude": 81.725},
+            {"entity_id": "1", "entity_title": "Palakollu", "latitude": 16.518, "longitude": 81.725, "raw_suggestion": {"cityName": "Palakollu"}},
+            {"entity_id": "2", "entity_title": "Palakollu Bypass Road", "latitude": 16.520, "longitude": 81.726, "raw_suggestion": {"cityName": "Palakollu"}},
+            {"entity_id": "3", "entity_title": "Palakollu - Razole Road", "latitude": 16.462, "longitude": 81.817, "raw_suggestion": {"cityName": "Palakollu"}},
+            {"entity_id": "4", "entity_title": "Palakollu - Valluru Road", "latitude": 16.515, "longitude": 81.736, "raw_suggestion": {"cityName": "Palakollu"}},
+            {"entity_id": "5", "entity_title": "Brodipet", "latitude": 16.525, "longitude": 81.725, "raw_suggestion": {"cityName": "Palakollu"}},
         ]
         mock_scraper_cls.return_value = mock_inst
 

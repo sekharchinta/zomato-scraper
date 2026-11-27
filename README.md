@@ -1,32 +1,35 @@
-# Zomato-Scraper: Distributed Platform with Single Redis Queue, PostgreSQL & Slack Alerts
+# Zomato-Scraper: Multi-User Isolated Extraction Platform with Per-User Redis Queues, PostgreSQL & Google OAuth
 
-An enterprise-grade, distributed web scraping, real-time monitoring, and data extraction platform for Zomato. Built with **Django**, **PostgreSQL** (`zomato-scraper` database, schema `zomato`), **Redis** (DB 1), **RQ (Redis Queue) Workers**, and **Slack Alerts**.
+An enterprise-grade, distributed multi-user web scraping, real-time telemetry, and restaurant intelligence platform for Zomato. Built with **Django**, **React (Vite + Tailwind CSS)**, **PostgreSQL** (`zomato-scraper` database, schema `zomato`), **Redis** (DB 1), **Isolated Per-User RQ Worker Pools**, **Google OAuth 2.0**, and **Slack Alerts**.
 
-This platform is powered by a **Single Redis Queue** (`zomato`) and a **streamlined per-restaurant worker pipeline**. It persists data into PostgreSQL tables managed strictly by Django models, tracks every scrape batch with a unique **UUID `requestid`**, extracts multi-page customer reviews with a 1.0-second delay, uses a 0.4-second delay for all other requests, enforces **100% live scraping** (zero caching), provides automatic retry and stage recovery, sends **Slack alerts** upon request completion and low success rate (< 99%), and features an uncluttered live dashboard with CSV export and an admin management panel.
-
-All operational execution scripts are organized in the [`commands/`](commands/) directory.
+All operational scripts and verification suites are organized in the [`commands/`](commands/) directory.
 
 ---
 
-## Key Features & Architectural Principles
+## Key Features & Architecture
 
-1. **Strictly Single Redis Queue (`zomato`)**: Only one queue named `zomato` exists in Redis (DB 1). All restaurant jobs are submitted to and processed from this single queue sequentially per batch.
-2. **Polite Request Delays**:
-   - **General Requests**: `0.4s` delay between pagination and restaurant details requests to avoid rate limits while maintaining high throughput.
-   - **Reviews Requests**: `1.0s` delay between review page requests to reliably extract full review histories without trigger-blocking or 401s.
-3. **100% Live Scraping (Zero Caching)**: Caching is completely eliminated. Because menus, ratings, offers, and delivery statuses change between morning, afternoon, and evening, every search triggers live discovery and fresh extraction.
-4. **PostgreSQL Database (`zomato-scraper`, Schema `zomato`)**:
-   - Primary tables: `zomato_batches` (UUID PK `requestid`) and `zomato_restaurants` (FK `requestid`).
-   - Zero SQLite, Zero MongoDB. Managed strictly via Django models.
-5. **Real-time Slack Alerts**:
-   - **Request Completed Alert (`✅`)**: Dispatched immediately upon batch completion with full scrape metrics and timestamps.
-   - **Low Job Success Rate Alert (`⚠️`)**: Dispatched when $\text{Success Rate} < 99.0\%$, alerting if more than 1% of jobs fail.
-   - Fail-safe, non-blocking delivery with atomic Redis deduplication.
-6. **Clean Django Admin Interface**:
-   - Registered sections: **Batches**, **Jobs (Extracted Data)**, and **Inputs**.
-   - Clean, standard plain-text display (no custom inline colors, effects, badges, or external links).
-   - Search by request UUID returns all records for that request. Status filtering enabled.
-7. **Commands Directory**: All execution commands for running the web server, workers, dashboard, migrations, tests, and maintenance tasks reside in [`commands/`](commands/).
+1. **Google OAuth 2.0 & Strict Multi-Tenant Isolation**:
+   - Sign in with Google Identity Services (GIS); JWT ID tokens are cryptographically verified in [`backend/scraper_app/auth_views.py`](backend/scraper_app/auth_views.py) via Google's public JWKS keys (`google.oauth2.id_token.verify_oauth2_token`) and bound to HTTP-only Django PostgreSQL sessions (`sessionid`) with CSRF protection (`/api/csrf/`).
+   - Every dashboard endpoint (`/api/collection-stats/`, `/api/scrape-status/`, `/api/scrape-data/`, `/api/completed-batches/`, `/api/export-csv/`, `/api/terminate-batch/`, `/api/delete-batch/`) scopes queries strictly to `request.user` and rejects unauthorized cross-user access with **HTTP 403 Forbidden**.
+   - Frontend `localStorage` active-request keys are partitioned per user (`zomato_active_request_id_u<userId>`).
+
+2. **Dynamic Per-User Redis Queues (`rq:queue:user_<id>`)**:
+   - When an authenticated user starts a pipeline, the platform dynamically allocates an isolated standard RQ list (`rq:queue:user_<id>` in Redis DB 1) with priority discovery tasks (`LPUSH`) and restaurant jobs (`RPUSH`).
+   - All pending jobs are natively visible in Redis (`redis-cli -n 1 LRANGE rq:queue:user_<id> 0 -1`) and live in **RQ Dashboard** (`http://127.0.0.1:9181`).
+   - Upon completion or termination, empty user queues are automatically purged from Redis RAM and unregistered from RQ Dashboard.
+
+3. **Full End-to-End Isolated Per-User Pipelines**:
+   - **`UserProducer`** ([`backend/scraper_app/producers/producer.py`](backend/scraper_app/producers/producer.py)): Isolated per-user request dispatch, URL pushing, and user-scoped queued batch advancement.
+   - **`UserURLExtractor`** ([`backend/scraper_app/tasks/url_extractor.py`](backend/scraper_app/tasks/url_extractor.py)): Separate per-user HTTP session (`ZomatoScraper`, geofence cookies, CSRF token) running inside the user's own worker pool.
+   - **`UserWorkerPool` & `MultiUserWorkerSupervisor`** ([`backend/scraper_app/workers/worker.py`](backend/scraper_app/workers/worker.py)): Dynamically spawns dedicated OS worker processes (`user-<id>-worker-1..N`) pinned exclusively (`isolated=True`) to each active user's queue, runs per-user `FailedJobsHandler` recovery, and gracefully shuts down workers when that user's queue drains.
+
+4. **Polite Request Delays & 100% Live Scraping**:
+   - **General Requests**: `0.4s` delay for pagination and restaurant detail requests.
+   - **Reviews Requests**: `1.0s` delay between review pagination requests.
+   - **Zero Caching**: Every request performs live location resolution, URL discovery, detail extraction, and review pagination.
+
+5. **Real-Time Slack Alerts**:
+   - **Request Completed (`✅`)** & **Low Success Rate (`⚠️` `< 99.0%`)** webhooks with atomic Redis deduplication.
 
 ---
 
@@ -34,146 +37,36 @@ All operational execution scripts are organized in the [`commands/`](commands/) 
 
 ```mermaid
 flowchart TD
-    subgraph Client["User & Dashboard"]
-        UI["Web Dashboard (Port 8000)\nSearch Autocomplete & Live Polling"]
-        Admin["Django Admin Panel (/admin)\nBatches, Extracted Data, Inputs"]
+    subgraph Client["React SPA (Port 5173 / 8000)"]
+        AUTH["Google OAuth 2.0 Sign-In -> Django Session + CSRF"]
+        UI["Multi-Tenant Dashboard & Live Polling"]
+        Admin["Django Admin (/admin)"]
     end
 
-    subgraph Producer["Producer Layer (scraper_app/producers/scrape_producer.py)"]
-        A["User enters City & Location"] --> B["Generate UUID requestid\nResolve location suggestions"]
-        B --> C["Live Discovery: Restaurant URLs (0.4s delay)"]
-        C --> D["Create ScrapeBatch (zomato_batches)\nCreate RestaurantJob records (zomato_restaurant_jobs)"]
-        D --> E["Enqueue restaurant jobs into\nSINGLE Redis Queue: 'zomato'"]
+    subgraph Producer["Isolated UserProducer (producer.py)"]
+        AUTH --> PA["User A: UserProducer(user_A)"]
+        AUTH --> PB["User B: UserProducer(user_B)"]
     end
 
-    subgraph SingleQueue["Redis Single Queue (DB 1)"]
-        E --> Q["Queue: zomato\nSupervised Concurrent Workers"]
+    subgraph Redis["Redis DB 1 (Native RQ Queues)"]
+        PA -->|"LPUSH discovery / RPUSH restaurants"| QA["rq:queue:user_<A>"]
+        PB -->|"LPUSH discovery / RPUSH restaurants"| QB["rq:queue:user_<B>"]
+        RQD["RQ Dashboard (:9181)\nLive Queued / Started / Finished / Failed"]
+        QA & QB --> RQD
     end
 
-    subgraph WorkerPipeline["Worker Pipeline (scraper_app/tasks/single_pipeline_task.py)"]
-        Q --> W["Worker takes ONE restaurant job"]
-        W --> P1["Phase 1: Restaurant Details (0.4s delay)\nExtract ID, cuisines, phone, timing, cost"]
-        P1 --> P2["Phase 2: Customer Reviews (1.0s delay)\nExtract all review pages"]
-        P2 --> P3["Phase 3: PostgreSQL Upsert (zomato_restaurants)\nSave name, city, location, reviews, delivery fields"]
-        P3 --> UPD["Update ScrapeBatch & RestaurantJob progress"]
+    subgraph Workers["MultiUserWorkerSupervisor (worker.py)"]
+        SUP["Watches rq:active_user_queues & PubSub"]
+        SUP -->|"Spawns Pool A (isolated=True)"| WA["UserWorkerPool(user_<A>)\nURL Extractor -> Details -> Reviews -> Upsert"]
+        SUP -->|"Spawns Pool B (isolated=True)"| WB["UserWorkerPool(user_<B>)\nURL Extractor -> Details -> Reviews -> Upsert"]
+        QA <--> WA
+        QB <--> WB
     end
 
-    subgraph Completion["Batch Lifecycle & Slack Alerts"]
-        UPD --> FIN{"All Jobs Finished?\n(done >= total)"}
-        FIN -->|Yes| ADV["complete_or_terminate_batch_and_advance"]
-        ADV --> ALERT1["Slack Alert: Request Completed ✅"]
-        ADV --> CHK{"Success Rate < 99.0%?"}
-        CHK -->|Yes| ALERT2["Slack Alert: Low Success Rate ⚠️"]
-        ADV --> NEXT["Advance to Next Queued Batch in Redis (5s settle wait)"]
-    end
-
-    subgraph Database["PostgreSQL ('zomato-scraper', Schema 'zomato')"]
-        D & UPD --> T1[("zomato_batches\nUUID requestid PK, status, metrics")]
-        D & UPD --> T2[("zomato_restaurant_jobs\nInput URL, name, stage tracking")]
-        P3 --> T3[("zomato_restaurants\nFK requestid, details, JSON reviews")]
+    subgraph Postgres["PostgreSQL ('zomato-scraper', Schema 'zomato')"]
+        WA & WB --> DB[("zomato_batches, zomato_jobs,\nzomato_restaurants, latlong_data, user_profiles")]
     end
 ```
-
----
-
-## Database Schema
-
-Database: **`zomato-scraper`** | Schema: **`zomato`**
-
-### 1. `zomato_batches` (`ScrapeBatch` Model)
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `requestid` | `UUID` | **Primary Key**: Unique UUID identifying the scrape request batch |
-| `city` | `VARCHAR(100)` | Target city |
-| `location` | `VARCHAR(200)` | Target location / locality |
-| `status` | `VARCHAR(50)` | Batch state (`queued`, `in_progress`, `completed`, `terminated`, `failed`) |
-| `progress` | `INTEGER` | Real-time percentage completion (0-100%) |
-| `total_restaurants` | `INTEGER` | Total discovered restaurant jobs |
-| `parsed_delivery` | `INTEGER` | Completed delivery schema parsed count |
-| `completed_jobs` | `INTEGER` | Successfully extracted jobs |
-| `failed_jobs` | `INTEGER` | Failed jobs count |
-| `fields` | `JSONB` | User-selected extraction fields |
-| `created_at` | `TIMESTAMP` | Timestamp when request was submitted |
-| `started_at` | `TIMESTAMP` | Timestamp when workers began extraction |
-| `completed_at` | `TIMESTAMP` | Timestamp when batch completed |
-
-### 2. `zomato_restaurants` (`RestaurantRecord` Model)
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `id` | `BIGSERIAL` | **Primary Key** |
-| `requestid` | `UUID` | **Foreign Key** &rarr; `zomato_batches.requestid` |
-| `name` | `VARCHAR(255)` | Restaurant name |
-| `city` | `VARCHAR(100)` | City |
-| `location` | `VARCHAR(200)` | Location / locality |
-| `pageurl` | `TEXT` | Relative Zomato URL path |
-| `canonical_url` | `TEXT` | Canonical web URL |
-| `phone_number` | `TEXT` | Contact phone numbers |
-| `address` | `TEXT` | Street address |
-| `cuisines` | `TEXT` | Comma-separated cuisines |
-| `timing` | `TEXT` | Operational hours |
-| `rating` | `VARCHAR(20)` | Aggregate rating (e.g. `4.2`) |
-| `votes` | `INTEGER` | Rating vote count |
-| `costof_two` | `VARCHAR(100)` | Cost for two text |
-| `total_reviews` | `INTEGER` | Number of reviews collected |
-| `reviews` | `JSONB` | Structured customer reviews array (user, rating, text, likes) |
-| `status` | `VARCHAR(50)` | Record extraction status (`completed`, `failed_all_retries`) |
-| `scraped_at` | `TIMESTAMP` | Timestamp of extraction |
-
-### 3. `zomato_restaurant_jobs` (`RestaurantJob` Model)
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `id` | `BIGSERIAL` | Primary Key |
-| `batch_id` | `UUID` | Foreign Key &rarr; `zomato_batches.requestid` |
-| `name` | `VARCHAR(255)` | Restaurant name |
-| `page_url` | `TEXT` | Input URL path |
-| `stage` | `VARCHAR(50)` | Granular stage (`pending`, `processing_details`, `processing_reviews`, `completed`, `failed_all_retries`) |
-| `last_review_page` | `INTEGER` | Checkpoint for resuming review pagination |
-| `created_at`, `updated_at`| `TIMESTAMP` | Record timestamps |
-
----
-
-## Slack Alerts Integration
-
-The platform provides automated notifications to Slack via **Incoming Webhook**:
-
-1. **Request Completed Alert (`✅`)**:
-   - Sent automatically when a batch finishes processing all restaurants (`status == 'completed'`).
-   - Details: Batch ID, City, Location, Status, Success Rate, Completed/Total counts, Failed count, Timestamp.
-2. **Low Job Success Rate Alert (`⚠️`)**:
-   - Sent when $\text{Success Rate} = (\text{completed\_jobs} / \text{total\_restaurants}) \times 100.0 < 99.0\%$.
-   - Details: Batch ID, City, Location, Actual Success Rate vs $99.0\%$ threshold, Failed jobs count.
-
-### Configuring Slack Alerts
-In your `.env` file, configure your Slack Incoming Webhook URL:
-```ini
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-SLACK_ALERT_ENABLED=true
-SLACK_MIN_SUCCESS_RATE=99.0
-```
-
-### Testing Slack Alerts CLI
-You can test alert delivery at any time from your terminal:
-```bash
-# Test Request Completed alert
-python manage.py test_slack_alert --type=completed
-
-# Test Low Success Rate alert (< 99%)
-python manage.py test_slack_alert --type=low_success
-```
-
----
-
-## Django Admin Panel (`/admin`)
-
-The Django Admin interface is customized for monitoring and auditing:
-
-| Section Name | Description | Key Features |
-| :--- | :--- | :--- |
-| **Batches** | Scrape batch tracking table | Displays Request ID, City, Location, Status, Progress, Total, Completed, Failed, and Timestamps. Filter by status, city, date. |
-| **Jobs (Extracted Data)** | Extracted restaurant records | Displays all extracted columns (Name, City, Location, Rating, Votes, Cost for Two, Cuisines, Phone, URLs, Reviews count, Status, Scraped At). **Search by Request UUID** returns all records for that request. Status filter enabled. |
-| **Inputs** | Raw input URLs and names | Streamlined table displaying Input URL (`page_url`), restaurant Name, associated Request ID, and Status. |
-
-> **Clean Plain-Text UI**: All custom colors, effects, badges, and external links are removed in favor of clean, standard, accessible plain text.
 
 ---
 
@@ -184,109 +77,90 @@ The Django Admin interface is customized for monitoring and auditing:
 git clone https://github.com/sekharchinta/zomato-scraper.git
 cd zomato-scraper
 
-# Create and activate virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
+
+cd frontend && npm install && cd ..
 ```
 
 ### 2. Configure Environment Variables
-Copy the template and configure your local PostgreSQL and Redis credentials:
 ```bash
 cp .env.example .env
 ```
+Configure PostgreSQL (`zomato-scraper`, schema `zomato`), Redis DB `1`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, and optional Slack / LAN origin overrides (`EXTRA_ALLOWED_HOSTS`, `EXTRA_CORS_ORIGINS`, `EXTRA_CSRF_ORIGINS`).
 
-```
-
-### 3. Setup PostgreSQL Database & Schema
-In `psql` (as postgres superuser):
+### 3. Setup PostgreSQL Database & Migrate
 ```sql
 CREATE DATABASE "zomato-scraper";
 \c "zomato-scraper"
 CREATE SCHEMA IF NOT EXISTS zomato;
 ```
-
-### 4. Run Migrations
 ```bash
 ./commands/migrate.sh
-# Or:
-python manage.py migrate
 ```
 
 ---
 
 ## Running the Platform
 
-Run the following commands in separate terminal tabs:
+Run the services in separate terminals (with `/home/sekhar/Gamyam/zomato/venv` activated):
 
+| Terminal | Command | Endpoint / Role |
+| :--- | :--- | :--- |
+| **1. Backend API** | `./commands/run_server.sh` | `http://127.0.0.1:8000` (API + Django Admin `/admin`) |
+| **2. Isolated Workers** | `cd backend && ../venv/bin/python manage.py run_workers --workers 6` | Dynamic per-user `UserWorkerPool` supervisor (`--workers-per-user 3`, `--max-total-workers 24`) |
+| **3. RQ Monitor** | `./commands/run_rq_dashboard.sh` | `http://127.0.0.1:9181` (Live Redis DB 1 queues & jobs) |
+| **4. Frontend (Dev)** | `./commands/run_frontend.sh` | `http://localhost:5173` (Vite dev server with `/api` & `/admin` proxy) |
+
+For production bundle serving directly via Django:
+```bash
+./commands/build_frontend.sh
 ```
-┌─────────────────────────────────┬─────────────────────────────────┬─────────────────────────────────┐
-│           TERMINAL 1            │           TERMINAL 2            │           TERMINAL 3            │
-│       Django Web Server         │       Single-Queue Workers      │          RQ Dashboard           │
-│                                 │                                 │                                 │
-│    ./commands/run_server.sh     │    ./commands/run_workers.sh    │  ./commands/run_rq_dashboard.sh │
-│                                 │                                 │                                 │
-│    http://127.0.0.1:8000        │    3 Concurrent Workers         │    http://127.0.0.1:9181        │
-└─────────────────────────────────┴─────────────────────────────────┴─────────────────────────────────┘
-```
 
-- **React Dashboard (Production)**: `http://127.0.0.1:8000` (Served directly by Django)
-- **Admin Panel**: `http://127.0.0.1:8000/admin`
-- **RQ Monitor**: `http://127.0.0.1:9181`
+---
 
-### Repository Structure
+## Sharing on the Same Wi-Fi Network
 
-```
+Because Google Identity Services restricts plain HTTP OAuth logins to `localhost` / `127.0.0.1`:
+1. Ensure OpenSSH server is running on the host (`sudo apt install -y openssh-server && sudo systemctl enable --now ssh && sudo ufw allow 22/tcp`).
+2. From the teammate's laptop on the same Wi-Fi, forward ports locally:
+   ```bash
+   ssh -N -L 5173:localhost:5173 -L 9181:localhost:9181 <linux_username>@<host_wifi_ip>
+   ```
+3. Open `http://localhost:5173` (Dashboard) and `http://localhost:9181` (RQ Monitor) in the teammate's browser.
+
+---
+
+## Repository Structure
+
+```text
 zomato/
-├── backend/                  # Django API, PostgreSQL ORM, tasks, scraper engine, tests
+├── backend/
 │   ├── manage.py
 │   ├── config.py
 │   ├── scraper.py
+│   ├── zomato_scraper/              # Settings (CORS, CSRF, PostgreSQL, Redis), URLs, Test Runner
 │   ├── scraper_app/
-│   ├── zomato_scraper/
-│   └── tests/
-├── frontend/                 # React.js SPA (Vite, Tailwind CSS, Lucide React)
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── src/
-│   └── dist/                 # Production compiled bundle
-├── commands/                 # Unified lifecycle & execution scripts
-│   ├── run_server.sh
-│   ├── run_workers.sh
-│   ├── run_rq_dashboard.sh
-│   ├── run_frontend.sh
-│   ├── build_frontend.sh
-│   ├── migrate.sh
-│   └── run_tests.sh
-├── .env                      # Global environment configuration
-└── requirements.txt          # Root & backend Python requirements link
-```
-
-### Frontend Development (Vite + React.js)
-
-To run the React frontend in development mode with Hot Module Replacement (HMR):
-```bash
-./commands/run_frontend.sh
-# Accessible at http://localhost:5173 with proxy to Django API at http://127.0.0.1:8000
-```
-
-To build production React assets:
-```bash
-./commands/build_frontend.sh
-# Outputs optimized bundle to frontend/dist/ for direct Django serving
+│   │   ├── auth_views.py            # Google OAuth 2.0 JWT verification & Django session auth
+│   │   ├── views.py                 # Multi-tenant REST APIs, CSV export, CSRF endpoint
+│   │   ├── models.py                # ScrapeBatch, RestaurantJob, RestaurantRecord, LatLongData, UserProfile
+│   │   ├── producers/producer.py    # UserProducer & batch dispatch/advancement
+│   │   ├── tasks/                   # UserURLExtractor, restaurant_extractor, review_extractor, location_extractor
+│   │   └── workers/                 # FairQueue, UserWorkerPool, MultiUserWorkerSupervisor, FailedJobsHandler
+│   └── tests/                       # Django API/auth/pipeline tests & scraper unit tests
+├── frontend/                        # React SPA (Vite, Tailwind CSS, Lucide React)
+├── commands/                        # Lifecycle scripts (run_server, run_workers, run_rq_dashboard, run_tests, etc.)
+├── .env.example
+└── requirements.txt
 ```
 
 ---
 
 ## Running Automated Tests
 
-Run the full automated test suite (77 tests across Django integration, core scraping engine, and Slack alerts):
+Run the entire automated test suite across Django APIs, Google OAuth, Slack Alerts, Multi-Tenant Isolation, Dynamic Per-User Queues, Isolated Worker Pools, and Core Scraper Engine:
+
 ```bash
 ./commands/run_tests.sh
 ```
-
-- **Django PostgreSQL & Queue Suite**: 33 tests passing.
-- **Standalone Core Engine Suite**: 34 tests passing.
-- **Slack Alerting Suite**: 10 tests passing.

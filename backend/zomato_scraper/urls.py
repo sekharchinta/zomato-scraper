@@ -8,6 +8,7 @@ from django.urls import include, path, re_path
 from django.views.static import serve
 
 from scraper_app.views import (
+    csrf_token_view,
     react_app_view,
     delete_batch_api,
     export_csv_api,
@@ -52,6 +53,7 @@ urlpatterns = [
     path("api/export-csv/<str:request_id>/", export_csv_api, name="api_export_csv"),
     path("api/completed-batches/", get_completed_batches_api, name="api_completed_batches"),
     path("api/test-slack-alert/", test_slack_alert_api, name="api_test_slack_alert"),
+    path("api/csrf/", csrf_token_view, name="api_csrf"),
 
     # Google OAuth 2.0 Authentication
     path("api/auth/google/config/", google_auth_config, name="api_google_auth_config"),

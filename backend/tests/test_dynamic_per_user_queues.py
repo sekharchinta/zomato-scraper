@@ -1,5 +1,5 @@
 """
-commands/test_dynamic_per_user_queues.py
+tests/test_dynamic_per_user_queues.py
 
 Comprehensive Test Suite for Dynamic Per-User Dedicated Redis Queues
 with Automatic Lifecycle Deletion.
@@ -38,12 +38,9 @@ def dummy_job_func(x):
 class DynamicPerUserQueueLifecycleTests(TestCase):
     def setUp(self):
         self.conn: Redis = django_rq.get_connection("zomato")
-        # Clean Redis active queues test state
-        active_users = self.conn.lrange(ACTIVE_USERS_KEY, 0, -1)
-        for u in active_users:
-            u_str = u.decode("utf-8") if isinstance(u, bytes) else str(u)
-            FairQueue.delete_user_queue(self.conn, u_str)
-        self.conn.delete(ACTIVE_USERS_KEY)
+        # Clear any queues left by earlier test classes on isolated test Redis DB (never touch live DB 1)
+        if int(self.conn.connection_pool.connection_kwargs.get("db", 1)) != 1:
+            self.conn.flushdb()
 
         # Create two distinct test users
         self.user_a = User.objects.create_user(username="alice", email="alice@example.com", password="password123")
@@ -51,6 +48,9 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
 
         self.user_b = User.objects.create_user(username="bob", email="bob@example.com", password="password123")
         self.profile_b = UserProfile.objects.create(user=self.user_b, google_id="google_bob_202")
+
+        FairQueue.delete_user_queue(self.conn, self.user_a.id)
+        FairQueue.delete_user_queue(self.conn, self.user_b.id)
 
         self.batch_a = ScrapeBatch.objects.create(
             user=self.user_a,
@@ -71,7 +71,6 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
     def tearDown(self):
         FairQueue.delete_user_queue(self.conn, self.user_a.id)
         FairQueue.delete_user_queue(self.conn, self.user_b.id)
-        self.conn.delete(ACTIVE_USERS_KEY)
 
     def test_dynamic_per_user_queue_creation_and_registration(self):
         """Phase 1 & 2: Creating and enqueuing jobs into dedicated user queues."""
