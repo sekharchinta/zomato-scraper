@@ -63,9 +63,6 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         self._cleanup_redis()
 
     def _cleanup_redis(self):
-        for q_name in FairQueue.get_active_user_queues(self.conn):
-            if q_name.startswith("user_"):
-                FairQueue.delete_user_queue(self.conn, q_name)
         for uid in [getattr(getattr(self, "user_a", None), "id", None), getattr(getattr(self, "user_b", None), "id", None)]:
             if uid:
                 FairQueue.delete_user_queue(self.conn, uid)
@@ -420,5 +417,15 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         first_popped = FairQueue.dequeue_any([q_a], timeout=0, connection=self.conn)
         self.assertEqual(first_popped[0].id, prio_jobs[0].id)
         self.assertEqual(self.conn.llen(q_a.key), 4)
+
+        # Verify legacy :batch:* subqueue migration preserves jobs cleanly into rq:queue:<name>
+        legacy_subq = f"{q_a.key}:batch:legacy-batch-123"
+        self.conn.rpush(legacy_subq, "legacy-job-1", "legacy-job-2")
+        self.conn.rpush(f"{q_a.key}:batches", "legacy-batch-123")
+        migrated = FairQueue.migrate_legacy_subqueues(self.conn, queue_name=q_a.name)
+        self.assertGreaterEqual(migrated, 2)
+        self.assertFalse(self.conn.exists(legacy_subq))
+        self.assertFalse(self.conn.exists(f"{q_a.key}:batches"))
+        self.assertEqual(self.conn.llen(q_a.key), 6)
 
 

@@ -167,6 +167,36 @@ class FairQueue(DjangoRQ):
         logger.info("[FAIR_QUEUE] Deleted user queue '%s' from Redis.", q_name)
 
     @classmethod
+    def migrate_legacy_subqueues(cls, connection: Redis, queue_name: Optional[str] = None) -> int:
+        """
+        Promotes any legacy ':batch:<batch_id>' subqueue jobs into their parent
+        standard RQ list 'rq:queue:<name>' so restarting workers preserves in-flight jobs
+        and exposes them immediately in Redis & RQ Dashboard.
+        """
+        pattern = f"rq:queue:{queue_name}:batch:*" if queue_name else "rq:queue:*:batch:*"
+        migrated_jobs = 0
+        for raw_key in list(connection.keys(pattern)):
+            subq_key = as_text(raw_key)
+            parts = subq_key.split(":batch:", 1)
+            if len(parts) != 2:
+                continue
+            parent_key = parts[0]
+            q_name = parent_key.replace("rq:queue:", "", 1)
+            job_ids = connection.lrange(subq_key, 0, -1)
+            pipe = connection.pipeline()
+            if job_ids:
+                pipe.rpush(parent_key, *job_ids)
+                migrated_jobs += len(job_ids)
+                pipe.lrem(ACTIVE_USERS_KEY, 0, q_name)
+                pipe.rpush(ACTIVE_USERS_KEY, q_name)
+                pipe.sadd(GLOBAL_QUEUES_KEY, parent_key)
+            pipe.delete(subq_key, f"{parent_key}:batches")
+            pipe.execute()
+        if migrated_jobs > 0:
+            logger.info("[FAIR_QUEUE] Migrated %d legacy :batch subqueue job(s) into standard RQ lists.", migrated_jobs)
+        return migrated_jobs
+
+    @classmethod
     def remove_batch(cls, connection: Redis, queue_name: str, batch_id: str, user_id_or_user: Any = None) -> None:
         """Removes all queued jobs belonging to `batch_id` from the queue and auto-cleans if empty."""
         if user_id_or_user is not None:

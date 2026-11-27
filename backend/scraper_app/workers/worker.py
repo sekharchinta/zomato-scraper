@@ -345,6 +345,8 @@ class MultiUserWorkerSupervisor:
                 q_str = qb.decode("utf-8") if isinstance(qb, bytes) else str(qb)
                 if not q_str.startswith("rq:queue:"):
                     conn.srem(GLOBAL_QUEUES_KEY, qb)
+            # Promote any in-flight legacy :batch:* jobs into standard rq:queue:<name> lists
+            FairQueue.migrate_legacy_subqueues(conn)
             conn.sadd(GLOBAL_QUEUES_KEY, f"rq:queue:{self.queue_name}")
         except Exception as exc:
             logger.warning("[WORKER_SUPERVISOR] Notice during stale worker cleanup: %s", exc)
