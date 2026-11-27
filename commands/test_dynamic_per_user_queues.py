@@ -195,10 +195,11 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         ]
         queue_a.enqueue_many(datas_a)
 
-        self.assertTrue(self.conn.exists(queue_a.key + ":batches"))
+        self.assertTrue(self.conn.exists(queue_a.key))
+        self.assertEqual(self.conn.llen(queue_a.key), 5)
         self.assertIn(queue_a.name, FairQueue.get_active_user_queues(self.conn))
 
-        # Remove the batch subqueue
+        # Remove the batch jobs
         FairQueue.remove_batch(
             self.conn,
             queue_a.name,
@@ -206,8 +207,8 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
             user_id_or_user=self.user_a.id,
         )
 
-        # Queue and subqueues should be purged and unregistered immediately
-        self.assertFalse(self.conn.exists(f"{queue_a.key}:batch:{self.batch_a.requestid}"))
+        # Queue should be purged and unregistered immediately
+        self.assertEqual(self.conn.llen(queue_a.key), 0)
         self.assertFalse(self.conn.exists(queue_a.key))
         self.assertNotIn(queue_a.name, FairQueue.get_active_user_queues(self.conn))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.name))

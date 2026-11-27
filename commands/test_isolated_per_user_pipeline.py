@@ -379,3 +379,46 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         finally:
             pool_b.shutdown(cleanup_queue=True, connection=self.conn)
 
+    def test_07_rq_dashboard_shows_live_queued_jobs_and_priority_preemption(self):
+        """Verifies native standard RQ list exposes all queued batch jobs directly in Redis and RQ Dashboard."""
+        from rq_dashboard.cli import make_flask_app
+        from rq_dashboard.web import get_queue_registry_jobs_count
+        from scraper_app.producers.producer import push_urls_to_queue
+
+        batch = ScrapeBatch.objects.create(user=self.user_a, city="Hyderabad", location="Madhapur", location_key="hyd_mad")
+        for i in range(4):
+            RestaurantJob.objects.create(
+                batch=batch,
+                name=f"Restaurant {i}",
+                page_url=f"https://www.zomato.com/hyderabad/rest-{i}/info",
+                stage="pending",
+            )
+
+        push_res = push_urls_to_queue(str(batch.requestid), user_id=self.user_a.id)
+        self.assertEqual(push_res["enqueued_jobs"], 4)
+
+        q_a = FairQueue.for_user(self.user_a, connection=self.conn, isolated=True)
+        # Enqueue a priority task (no batch_id) via enqueue_many -> must preempt at head of rq:queue:user_<id>
+        prio_jobs = q_a.enqueue_many([q_a.prepare_data(concurrent_worker_pid_task, args=("test:iso:results_a", "PRIO"))])
+        self.assertEqual(len(prio_jobs), 1)
+
+        # Native Redis LLEN must show all 5 jobs directly in rq:queue:user_<id>
+        self.assertEqual(self.conn.llen(q_a.key), 5)
+
+        # RQ Dashboard Flask app context & live JSON endpoint must show all 5 queued jobs!
+        app = make_flask_app(None, None, None, "")
+        app.config["RQ_DASHBOARD_REDIS_URL"] = [f"redis://127.0.0.1:6379/{self.conn.connection_pool.connection_kwargs.get('db', 1)}"]
+        app.config["TESTING"] = True
+        with app.app_context():
+            app.redis_conn = self.conn
+            total_queued, dashboard_jobs = get_queue_registry_jobs_count(q_a.name, "queued", 0, 10, "asc", self.conn)
+            self.assertEqual(total_queued, 5)
+            self.assertEqual(len(dashboard_jobs), 5)
+            self.assertEqual(dashboard_jobs[0]["id"], prio_jobs[0].id)
+
+        # Priority job must dequeue first, followed by batch restaurant jobs
+        first_popped = FairQueue.dequeue_any([q_a], timeout=0, connection=self.conn)
+        self.assertEqual(first_popped[0].id, prio_jobs[0].id)
+        self.assertEqual(self.conn.llen(q_a.key), 4)
+
+
