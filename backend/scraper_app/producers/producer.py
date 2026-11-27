@@ -89,10 +89,10 @@ def clear_queue_with_delay(queue: Any, queue_name: str, delay_seconds: float = 5
         return False
 
 
-def push_urls_to_queue(request_id: str) -> Dict[str, Any]:
+def push_urls_to_queue(request_id: str, user_id: Optional[Any] = None) -> Dict[str, Any]:
     """
     Pushes all extracted restaurant URLs/jobs in 'zomato_jobs' for a given request_id
-    into the single Redis queue ('zomato') so worker.py can process them.
+    into the dedicated user Redis queue (or fallback 'zomato') so worker.py can process them.
     Called directly by tasks/url_extractor.py after URL discovery finishes.
     """
     batch = ScrapeBatch.objects.filter(requestid=request_id).first()
@@ -100,8 +100,16 @@ def push_urls_to_queue(request_id: str) -> Dict[str, Any]:
         logger.error("[PRODUCER] Cannot push URLs to queue: batch %s not found.", request_id)
         return {"status": "error", "message": f"Batch {request_id} not found"}
 
-    queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-    queue = django_rq.get_queue(queue_name)
+    if user_id is None and getattr(batch, "user", None):
+        user_id = batch.user.id
+
+    if user_id:
+        from scraper_app.workers.fair_queue import FairQueue
+        queue = FairQueue.for_user(user_id, connection=django_rq.get_connection("zomato"))
+        queue_name = queue.name
+    else:
+        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+        queue = django_rq.get_queue(queue_name)
 
     # Import worker job pipeline
     from scraper_app.tasks.restaurant_extractor import process_restaurant_pipeline_job
@@ -372,8 +380,13 @@ def dispatch_scrape_request(
         fields_selected=fields,
     )
 
-    queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-    queue = django_rq.get_queue(queue_name)
+    if user and (getattr(user, "is_authenticated", False) or isinstance(user, int)):
+        from scraper_app.workers.fair_queue import FairQueue
+        queue = FairQueue.for_user(user, connection=django_rq.get_connection("zomato"))
+        queue_name = queue.name
+    else:
+        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+        queue = django_rq.get_queue(queue_name)
 
     # Case A: Direct restaurant URL scraping
     if rest_url_str:
@@ -523,8 +536,14 @@ def start_queued_batch(queued_batch: Any) -> Dict[str, Any]:
         queued_batch.started_at = timezone.now()
         queued_batch.save(update_fields=["status", "started_at", "updated_at"])
 
-        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-        queue = django_rq.get_queue(queue_name)
+        user_id = queued_batch.user_id if getattr(queued_batch, "user_id", None) else None
+        if user_id:
+            from scraper_app.workers.fair_queue import FairQueue
+            queue = FairQueue.for_user(user_id, connection=django_rq.get_connection("zomato"))
+            queue_name = queue.name
+        else:
+            queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+            queue = django_rq.get_queue(queue_name)
 
         from scraper_app.tasks.url_extractor import extract_urls_from_latlongs
         rq_job = queue.enqueue(

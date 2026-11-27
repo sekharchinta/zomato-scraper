@@ -740,8 +740,10 @@ def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
 
     # 1. Clean up Redis Queue jobs for this batch
     try:
-        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-        queue = django_rq.get_queue(queue_name)
+        user_id = req.user_id if getattr(req, "user_id", None) else None
+        from scraper_app.workers.fair_queue import FairQueue
+        queue = FairQueue.for_user(user_id, connection=django_rq.get_connection("zomato"))
+        queue_name = queue.name
 
         # Cancel jobs known from RestaurantJob tracking records
         job_rq_ids = list(RestaurantJob.objects.filter(batch=req).exclude(rq_job_id="").values_list("rq_job_id", flat=True))
@@ -769,7 +771,7 @@ def delete_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
         # Remove FairQueue batch subqueue and unregister from active rotation
         try:
             from scraper_app.workers.fair_queue import FairQueue
-            FairQueue.remove_batch(queue.connection, queue_name, batch_id_str)
+            FairQueue.remove_batch(queue.connection, queue_name, batch_id_str, user_id_or_user=user_id)
         except Exception as fq_err:
             logger.warning("Error removing FairQueue batch subqueue for %s: %s", batch_id_str, fq_err)
 
@@ -867,8 +869,10 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
 
     # Cancel RQ jobs belonging ONLY to this batch in Redis (preserving other users' jobs)
     try:
-        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-        queue = django_rq.get_queue(queue_name)
+        user_id = req.user_id if getattr(req, "user_id", None) else None
+        from scraper_app.workers.fair_queue import FairQueue
+        queue = FairQueue.for_user(user_id, connection=django_rq.get_connection("zomato"))
+        queue_name = queue.name
         job_rq_ids = list(RestaurantJob.objects.filter(batch=req).exclude(rq_job_id="").values_list("rq_job_id", flat=True))
         for jid in job_rq_ids:
             try:
@@ -887,7 +891,7 @@ def terminate_batch_api(request: HttpRequest, request_id: str) -> JsonResponse:
         # Remove FairQueue batch subqueue and unregister from active rotation
         try:
             from scraper_app.workers.fair_queue import FairQueue
-            FairQueue.remove_batch(queue.connection, queue_name, batch_id_str)
+            FairQueue.remove_batch(queue.connection, queue_name, batch_id_str, user_id_or_user=user_id)
         except Exception as fq_err:
             logger.warning("Error removing FairQueue batch subqueue for %s on terminate: %s", batch_id_str, fq_err)
     except Exception as q_err:
