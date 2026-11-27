@@ -1,5 +1,5 @@
 """
-commands/test_dynamic_per_user_queues.py
+tests/test_dynamic_per_user_queues.py
 
 Comprehensive Test Suite for Dynamic Per-User Dedicated Redis Queues
 with Automatic Lifecycle Deletion.
@@ -38,12 +38,9 @@ def dummy_job_func(x):
 class DynamicPerUserQueueLifecycleTests(TestCase):
     def setUp(self):
         self.conn: Redis = django_rq.get_connection("zomato")
-        # Clean Redis active queues test state
-        active_users = self.conn.lrange(ACTIVE_USERS_KEY, 0, -1)
-        for u in active_users:
-            u_str = u.decode("utf-8") if isinstance(u, bytes) else str(u)
-            FairQueue.delete_user_queue(self.conn, u_str)
-        self.conn.delete(ACTIVE_USERS_KEY)
+        # Clear any queues left by earlier test classes on isolated test Redis DB (never touch live DB 1)
+        if int(self.conn.connection_pool.connection_kwargs.get("db", 1)) != 1:
+            self.conn.flushdb()
 
         # Create two distinct test users
         self.user_a = User.objects.create_user(username="alice", email="alice@example.com", password="password123")
@@ -51,6 +48,9 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
 
         self.user_b = User.objects.create_user(username="bob", email="bob@example.com", password="password123")
         self.profile_b = UserProfile.objects.create(user=self.user_b, google_id="google_bob_202")
+
+        FairQueue.delete_user_queue(self.conn, self.user_a.id)
+        FairQueue.delete_user_queue(self.conn, self.user_b.id)
 
         self.batch_a = ScrapeBatch.objects.create(
             user=self.user_a,
@@ -71,7 +71,6 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
     def tearDown(self):
         FairQueue.delete_user_queue(self.conn, self.user_a.id)
         FairQueue.delete_user_queue(self.conn, self.user_b.id)
-        self.conn.delete(ACTIVE_USERS_KEY)
 
     def test_dynamic_per_user_queue_creation_and_registration(self):
         """Phase 1 & 2: Creating and enqueuing jobs into dedicated user queues."""
@@ -83,10 +82,11 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         job_a1 = queue_a.enqueue(dummy_job_func, 10)
         self.assertIsNotNone(job_a1)
 
-        # Verify User A is registered in active user queues list and global queues set
+        # Verify User A is registered in active user queues list and global queues set (with rq:queue: key prefix)
         active_users = FairQueue.get_active_user_queues(self.conn)
         self.assertIn(queue_a.name, active_users)
-        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.name))
+        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.key))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.name))
 
         # Enqueue priority job for User B
         queue_b = FairQueue.for_user(self.user_b, connection=self.conn)
@@ -194,10 +194,11 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         ]
         queue_a.enqueue_many(datas_a)
 
-        self.assertTrue(self.conn.exists(queue_a.key + ":batches"))
+        self.assertTrue(self.conn.exists(queue_a.key))
+        self.assertEqual(self.conn.llen(queue_a.key), 5)
         self.assertIn(queue_a.name, FairQueue.get_active_user_queues(self.conn))
 
-        # Remove the batch subqueue
+        # Remove the batch jobs
         FairQueue.remove_batch(
             self.conn,
             queue_a.name,
@@ -205,8 +206,8 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
             user_id_or_user=self.user_a.id,
         )
 
-        # Queue and subqueues should be purged and unregistered immediately
-        self.assertFalse(self.conn.exists(f"{queue_a.key}:batch:{self.batch_a.requestid}"))
+        # Queue should be purged and unregistered immediately
+        self.assertEqual(self.conn.llen(queue_a.key), 0)
         self.assertFalse(self.conn.exists(queue_a.key))
         self.assertNotIn(queue_a.name, FairQueue.get_active_user_queues(self.conn))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, queue_a.name))
@@ -225,9 +226,10 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         self.assertEqual(res["status"], "queued")
         self.assertEqual(res["queue"], expected_queue_name)
 
-        # Verify User A's dedicated queue is registered in Redis and RQ Dashboard
+        # Verify User A's dedicated queue is registered in Redis and RQ Dashboard (with rq:queue: prefix)
         self.assertIn(expected_queue_name, FairQueue.get_active_user_queues(self.conn))
-        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, expected_queue_name))
+        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, f"rq:queue:{expected_queue_name}"))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, expected_queue_name))
 
         batch = ScrapeBatch.objects.get(batch_id=res["batch_id"])
         self.assertEqual(batch.user, self.user_a)
@@ -252,5 +254,6 @@ class DynamicPerUserQueueLifecycleTests(TestCase):
         self.assertFalse(self.conn.exists(queue_a.key))
         self.assertFalse(self.conn.exists(f"{queue_a.key}:batches"))
         self.assertNotIn(expected_queue_name, FairQueue.get_active_user_queues(self.conn))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, f"rq:queue:{expected_queue_name}"))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, expected_queue_name))
 

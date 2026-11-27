@@ -1,5 +1,5 @@
 """
-commands/test_isolated_per_user_pipeline.py
+tests/test_isolated_per_user_pipeline.py
 
 End-to-End Verification for Isolated Per-User Concurrent Pipelines:
 1. UserProducer: Scoped batch dispatch, URL pushing, and user-isolated batch advancement.
@@ -63,9 +63,9 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         self._cleanup_redis()
 
     def _cleanup_redis(self):
-        for q_name in FairQueue.get_active_user_queues(self.conn):
-            if q_name.startswith("user_"):
-                FairQueue.delete_user_queue(self.conn, q_name)
+        if int(self.conn.connection_pool.connection_kwargs.get("db", 1)) != 1:
+            self.conn.flushdb()
+            return
         for uid in [getattr(getattr(self, "user_a", None), "id", None), getattr(getattr(self, "user_b", None), "id", None)]:
             if uid:
                 FairQueue.delete_user_queue(self.conn, uid)
@@ -310,5 +310,129 @@ class TestIsolatedPerUserPipeline(TransactionTestCase):
         self.assertFalse(self.conn.exists(q_b.key))
         self.assertNotIn(q_a.name, FairQueue.get_active_user_queues(self.conn))
         self.assertNotIn(q_b.name, FairQueue.get_active_user_queues(self.conn))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.key))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_b.key))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.name))
         self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_b.name))
+
+    def test_06_rq_dashboard_keys_live_worker_survival_and_no_double_enqueue(self):
+        """
+        Verifies:
+        1. rq:queues stores valid 'rq:queue:<name>' keys so rq.Queue.all() / rq-dashboard never crash with 500.
+        2. FairQueue.dequeue_any(..., timeout=5) raises DequeueTimeout so burst=False live workers stay alive >2s.
+        3. start_queued_batch does not double-enqueue extract_urls_from_latlongs after dispatch_scrape_request.
+        """
+        from rq import Queue
+        from rq.exceptions import DequeueTimeout
+        from scraper_app.producers.producer import dispatch_scrape_request, start_queued_batch
+        from scraper_app.workers.worker import UserWorkerPool
+
+        # 1. Dispatch request and verify start_queued_batch does not double-enqueue
+        res = dispatch_scrape_request(
+            city="Hyderabad",
+            location_raw="Banjara Hills",
+            user=self.user_a,
+        )
+        batch = ScrapeBatch.objects.get(batch_id=res["batch_id"])
+        q_a = FairQueue.for_user(self.user_a, connection=self.conn, isolated=True)
+        self.assertEqual(q_a.count, 1)
+
+        dup_res = start_queued_batch(batch)
+        self.assertEqual(dup_res["status"], "success")
+        self.assertEqual(q_a.count, 1)  # Must still be 1 job, NOT 2!
+
+        # 2. Verify rq:queues has valid 'rq:queue:...' key so rq.Queue.all() succeeds (no ValueError/500)
+        self.assertTrue(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.key))
+        self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, q_a.name))
+        # Clean any stale non-prefixed keys and verify Queue.all()
+        for qb in self.conn.smembers(GLOBAL_QUEUES_KEY):
+            s = qb.decode("utf-8") if isinstance(qb, bytes) else str(qb)
+            if not s.startswith("rq:queue:"):
+                self.conn.srem(GLOBAL_QUEUES_KEY, qb)
+        all_queues = Queue.all(connection=self.conn)
+        self.assertTrue(any(q.name == q_a.name for q in all_queues))
+
+        # 2b. Verify supervisor reconcile_user_pools auto-cleans malformed unprefixed keys & empty user queues
+        FairQueue.delete_user_queue(self.conn, self.user_a.id)
+        self.conn.sadd(GLOBAL_QUEUES_KEY, "user_858", "rq:queue:user_99998")
+        sup_clean = MultiUserWorkerSupervisor(workers=2, fallback_workers=0, burst=True)
+        try:
+            sup_clean.reconcile_user_pools(check_db_active=False)
+            self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "user_858"))
+            self.assertFalse(self.conn.sismember(GLOBAL_QUEUES_KEY, "rq:queue:user_99998"))
+        finally:
+            sup_clean.shutdown()
+
+        # 3. Verify DequeueTimeout raised when isolated queue is empty with timeout > 0
+        q_b_empty = FairQueue.for_user(self.user_b, connection=self.conn, isolated=True)
+        with self.assertRaises(DequeueTimeout):
+            FairQueue.dequeue_any([q_b_empty], timeout=5, connection=self.conn)
+
+        # 4. Verify live burst=False worker stays alive for >2s when idle and executes jobs arriving later
+        pool_b = UserWorkerPool(queue_name=q_b_empty.name, num_workers=1, burst=False, isolated=True)
+        try:
+            pool_b.start()
+            time.sleep(2.2)
+            self.assertEqual(pool_b.active_worker_count(), 1, "Live burst=False worker exited prematurely!")
+
+            q_b_empty.enqueue(concurrent_worker_pid_task, "test:iso:results_b", "LIVE")
+            deadline = time.time() + 5.0
+            while time.time() < deadline and self.conn.llen("test:iso:results_b") == 0:
+                time.sleep(0.1)
+            self.assertEqual(self.conn.llen("test:iso:results_b"), 1)
+        finally:
+            pool_b.shutdown(cleanup_queue=True, connection=self.conn)
+
+    def test_07_rq_dashboard_shows_live_queued_jobs_and_priority_preemption(self):
+        """Verifies native standard RQ list exposes all queued batch jobs directly in Redis and RQ Dashboard."""
+        from rq_dashboard.cli import make_flask_app
+        from rq_dashboard.web import get_queue_registry_jobs_count
+        from scraper_app.producers.producer import push_urls_to_queue
+
+        batch = ScrapeBatch.objects.create(user=self.user_a, city="Hyderabad", location="Madhapur", location_key="hyd_mad")
+        for i in range(4):
+            RestaurantJob.objects.create(
+                batch=batch,
+                name=f"Restaurant {i}",
+                page_url=f"https://www.zomato.com/hyderabad/rest-{i}/info",
+                stage="pending",
+            )
+
+        push_res = push_urls_to_queue(str(batch.requestid), user_id=self.user_a.id)
+        self.assertEqual(push_res["enqueued_jobs"], 4)
+
+        q_a = FairQueue.for_user(self.user_a, connection=self.conn, isolated=True)
+        # Enqueue a priority task (no batch_id) via enqueue_many -> must preempt at head of rq:queue:user_<id>
+        prio_jobs = q_a.enqueue_many([q_a.prepare_data(concurrent_worker_pid_task, args=("test:iso:results_a", "PRIO"))])
+        self.assertEqual(len(prio_jobs), 1)
+
+        # Native Redis LLEN must show all 5 jobs directly in rq:queue:user_<id>
+        self.assertEqual(self.conn.llen(q_a.key), 5)
+
+        # RQ Dashboard Flask app context & live JSON endpoint must show all 5 queued jobs!
+        app = make_flask_app(None, None, None, "")
+        app.config["RQ_DASHBOARD_REDIS_URL"] = [f"redis://127.0.0.1:6379/{self.conn.connection_pool.connection_kwargs.get('db', 1)}"]
+        app.config["TESTING"] = True
+        with app.app_context():
+            app.redis_conn = self.conn
+            total_queued, dashboard_jobs = get_queue_registry_jobs_count(q_a.name, "queued", 0, 10, "asc", self.conn)
+            self.assertEqual(total_queued, 5)
+            self.assertEqual(len(dashboard_jobs), 5)
+            self.assertEqual(dashboard_jobs[0]["id"], prio_jobs[0].id)
+
+        # Priority job must dequeue first, followed by batch restaurant jobs
+        first_popped = FairQueue.dequeue_any([q_a], timeout=0, connection=self.conn)
+        self.assertEqual(first_popped[0].id, prio_jobs[0].id)
+        self.assertEqual(self.conn.llen(q_a.key), 4)
+
+        # Verify legacy :batch:* subqueue migration preserves jobs cleanly into rq:queue:<name>
+        legacy_subq = f"{q_a.key}:batch:legacy-batch-123"
+        self.conn.rpush(legacy_subq, "legacy-job-1", "legacy-job-2")
+        self.conn.rpush(f"{q_a.key}:batches", "legacy-batch-123")
+        migrated = FairQueue.migrate_legacy_subqueues(self.conn, queue_name=q_a.name)
+        self.assertGreaterEqual(migrated, 2)
+        self.assertFalse(self.conn.exists(legacy_subq))
+        self.assertFalse(self.conn.exists(f"{q_a.key}:batches"))
+        self.assertEqual(self.conn.llen(q_a.key), 6)
+
+

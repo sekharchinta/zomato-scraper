@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Execute Full Test Suites (Django PostgreSQL & Core Scraper Engine)
+# Execute Full Test Suites (Django PostgreSQL, Multi-User Queues, Isolation, Slack Alerts & Scraper Engine)
 set -e
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd )"
@@ -15,12 +15,18 @@ if [ -d "venv" ]; then
 fi
 
 echo "================================================================="
-echo "  [1/2] Running Django PostgreSQL & Single Queue Test Suite"
+echo "  [1/2] Running Full Django PostgreSQL, Auth, Queue & Isolation Tests"
 echo "================================================================="
-"$PYTHON" manage.py test tests.test_django_scraper tests.test_auth
+"$PYTHON" manage.py test \
+    tests.test_django_scraper \
+    tests.test_auth \
+    tests.test_slack_alerts \
+    tests.test_frontend_dashboard_user_isolation \
+    tests.test_dynamic_per_user_queues \
+    tests.test_isolated_per_user_pipeline
 
 echo ""
 echo "================================================================="
-echo "  [2/2] Running Core Scraper Engine Unit Test Suite (34 Tests)"
+echo "  [2/2] Running Core Scraper Engine Unit Test Suite"
 echo "================================================================="
 "$PYTHON" -m unittest tests/test_scraper.py

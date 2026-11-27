@@ -3,6 +3,7 @@ Django settings for Zomato-Scraper project.
 """
 
 import os
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -19,7 +20,9 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-zomato-scraper-redi
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+def _split_csv_env(name: str) -> list[str]:
+    return [item.strip() for item in os.getenv(name, '').split(',') if item.strip()]
+
 
 # Application definition
 INSTALLED_APPS = [
@@ -48,9 +51,34 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
+    'http://192.168.0.10:5173',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://192.168.0.10:8000',
+    *_split_csv_env('EXTRA_CORS_ORIGINS'),
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+
+CORS_ALLOW_ALL_ORIGINS = False
+
 CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://192.168.0.10:5173',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://192.168.0.10:8000',
+    *_split_csv_env('EXTRA_CSRF_ORIGINS'),
+]
+
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '192.168.0.10',
+    'testserver',
+    *_split_csv_env('EXTRA_ALLOWED_HOSTS'),
+]
 
 ROOT_URLCONF = 'zomato_scraper.urls'
 
@@ -96,10 +124,11 @@ DATABASES = {
     }
 }
 
-# Single Redis Queue Configuration (Dedicated Redis DB 1)
+# Single Redis Queue Configuration (Dedicated DB 1 for live; isolated DB 2 during test runs)
+IS_TESTING = len(sys.argv) > 1 and sys.argv[1] == 'test'
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
-REDIS_DB = int(os.getenv('REDIS_DB', '1'))
+REDIS_DB = int(os.getenv('TEST_REDIS_DB', '2')) if IS_TESTING else int(os.getenv('REDIS_DB', '1'))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
 SINGLE_QUEUE_NAME = os.getenv('SINGLE_QUEUE_NAME', 'zomato')
 
@@ -172,9 +201,4 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'http://localhost:8000',
-    'http://127.0.0.1:8000',
-]
+
