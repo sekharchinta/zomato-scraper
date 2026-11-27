@@ -30,12 +30,20 @@ class FailedJobsHandler:
         queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
         self.queues = queues or [queue_name]
 
+    def _resolve_queue(self, q_name: str):
+        """Safely resolves dynamic user queues ('user_<id>') as well as default 'zomato'."""
+        default_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+        if q_name == default_name:
+            return django_rq.get_queue(q_name)
+        from scraper_app.workers.fair_queue import FairQueue
+        return FairQueue.resolve_queue(q_name)
+
     def get_failed_counts(self) -> Dict[str, int]:
-        """Returns the number of failed jobs in FailedJobRegistry for the single queue."""
+        """Returns the number of failed jobs in FailedJobRegistry for monitored queues."""
         counts = {}
         for q_name in self.queues:
             try:
-                q = django_rq.get_queue(q_name)
+                q = self._resolve_queue(q_name)
                 reg = FailedJobRegistry(queue=q)
                 counts[q_name] = reg.count
             except Exception:
@@ -43,10 +51,10 @@ class FailedJobsHandler:
         return counts
 
     def are_all_queues_empty(self) -> bool:
-        """Checks if the project queue is currently empty of waiting jobs."""
+        """Checks if monitored queues are currently empty of waiting jobs."""
         for q_name in self.queues:
             try:
-                q = django_rq.get_queue(q_name)
+                q = self._resolve_queue(q_name)
                 if not q.is_empty():
                     return False
             except Exception:
@@ -55,10 +63,10 @@ class FailedJobsHandler:
 
     def process_failed_jobs(self) -> Dict[str, Any]:
         """
-        Processes failed jobs in FailedJobRegistry for 'zomato':
+        Processes failed jobs in FailedJobRegistry for monitored queues:
         1. If a job has not yet completed a secondary attempt:
            Inspects whether restaurant details or review failed from RestaurantJob.
-           Re-enqueues it into the SAME single queue with resume_stage and fresh 3 retries.
+           Re-enqueues it into the SAME queue with resume_stage and fresh 3 retries.
         2. If a job fails again after the secondary attempt:
            Persists partial/fallback data in PostgreSQL, marks failed_all_retries,
            dismisses the job from registry, and moves to the next job.
@@ -68,7 +76,7 @@ class FailedJobsHandler:
 
         for q_name in self.queues:
             try:
-                queue = django_rq.get_queue(q_name)
+                queue = self._resolve_queue(q_name)
                 registry = FailedJobRegistry(queue=queue)
                 job_ids = registry.get_job_ids()
 
@@ -218,8 +226,9 @@ class FailedJobsHandler:
                 complete_or_terminate_batch_and_advance(batch, status="completed", delay_seconds=1.0)
             return {"status": "completed", "requeued_count": 0}
 
-        queue_name = self.queues[0]
-        queue = django_rq.get_queue(queue_name)
+        from scraper_app.workers.fair_queue import FairQueue
+        queue_name = FairQueue.get_user_queue_name(getattr(batch, "user_id", None)) if getattr(batch, "user_id", None) else self.queues[0]
+        queue = self._resolve_queue(queue_name)
         from scraper_app.tasks.restaurant_extractor import process_restaurant_pipeline_job
         from scraper_app.tasks.base import DEFAULT_RETRY
 

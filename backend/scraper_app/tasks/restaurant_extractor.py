@@ -39,14 +39,16 @@ def _handle_failed_urls_after_queue_completion(batch: ScrapeBatch) -> int:
     """
     Runs AFTER queue completion of all pushed jobs for a batch:
     If all pushed jobs are finished and any jobs failed during the initial run
-    (secondary_attempt_done=False), pushes ONLY those failed jobs into the single
-    queue 'zomato' for worker processing based on status.
+    (secondary_attempt_done=False), pushes ONLY those failed jobs into the user's
+    dedicated queue (or fallback 'zomato') for worker processing based on status.
     """
     if not batch:
         return 0
     try:
         from scraper_app.workers.failed_jobs import FailedJobsHandler
-        handler = FailedJobsHandler()
+        from scraper_app.workers.fair_queue import FairQueue
+        target_queue = FairQueue.get_user_queue_name(getattr(batch, "user_id", None))
+        handler = FailedJobsHandler(queues=[target_queue])
         res = handler.process_failed_jobs_for_batch(batch_id=str(batch.requestid))
         return res.get("requeued_count", 0)
     except Exception as exc:

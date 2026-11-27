@@ -4,6 +4,7 @@ producers package exports.
 
 from scraper_app.producers.producer import (
     DEFAULT_RETRY,
+    UserProducer,
     clear_queue_with_delay,
     complete_or_terminate_batch_and_advance,
     dispatch_scrape_request,
@@ -15,6 +16,7 @@ from scraper_app.producers.producer import (
 
 __all__ = [
     "DEFAULT_RETRY",
+    "UserProducer",
     "clear_queue_with_delay",
     "complete_or_terminate_batch_and_advance",
     "dispatch_scrape_request",

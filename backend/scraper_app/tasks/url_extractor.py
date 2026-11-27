@@ -36,6 +36,39 @@ logger = logging.getLogger("url_extractor")
 DEFAULT_RETRY = getattr(settings, "RQ_RETRY_CONFIG", None)
 
 
+class UserURLExtractor:
+    """
+    Isolated per-user URL Extractor.
+    Executes URL discovery inside a user's dedicated worker pool using an isolated
+    ZomatoScraper HTTP session (cookies, locus geofence, CSRF token) and pushes
+    discovered jobs strictly through UserProducer(user_id=...).
+    """
+
+    def __init__(self, batch_id: str, user_id: Optional[Any] = None) -> None:
+        self.batch_id = str(batch_id)
+        self.user_id = user_id
+
+    def run(
+        self,
+        city: str,
+        locations_list: Optional[List[Dict[str, Any]]] = None,
+        location_raw: Any = None,
+        location_key: Optional[str] = None,
+        location_title: Optional[str] = None,
+        max_pages: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return _execute_user_url_extraction(
+            batch_id=self.batch_id,
+            city=city,
+            locations_list=locations_list,
+            location_raw=location_raw,
+            location_key=location_key,
+            location_title=location_title,
+            max_pages=max_pages,
+            explicit_user_id=self.user_id,
+        )
+
+
 def extract_urls_from_latlongs(
     batch_id: str,
     city: str,
@@ -48,8 +81,29 @@ def extract_urls_from_latlongs(
     """
     Extracts all restaurant URLs for the chosen location coordinates,
     persists each URL into the 'zomato_jobs' table in PostgreSQL,
-    and calls producer.py to push all URLs into the Redis queue based on request_id.
+    and calls UserProducer to push all URLs into the user's dedicated Redis queue.
     """
+    return _execute_user_url_extraction(
+        batch_id=batch_id,
+        city=city,
+        locations_list=locations_list,
+        location_raw=location_raw,
+        location_key=location_key,
+        location_title=location_title,
+        max_pages=max_pages,
+    )
+
+
+def _execute_user_url_extraction(
+    batch_id: str,
+    city: str,
+    locations_list: Optional[List[Dict[str, Any]]] = None,
+    location_raw: Any = None,
+    location_key: Optional[str] = None,
+    location_title: Optional[str] = None,
+    max_pages: Optional[int] = None,
+    explicit_user_id: Optional[Any] = None,
+) -> Dict[str, Any]:
     batch = ScrapeBatch.objects.filter(requestid=batch_id).first()
     if not batch:
         logger.error("[URL_EXTRACTOR] ScrapeBatch '%s' not found. Aborting.", batch_id)
@@ -247,9 +301,13 @@ def extract_urls_from_latlongs(
             batch_id,
         )
 
-        # 4. Call producer.py to push all extracted URLs into the queue based on request_id
-        from scraper_app.producers.producer import push_urls_to_queue
-        dispatch_result = push_urls_to_queue(request_id=batch_id)
+        # 4. Call UserProducer (isolated per user) to push all extracted URLs into the user's queue
+        from scraper_app.producers.producer import UserProducer, push_urls_to_queue
+        owner_user_id = explicit_user_id if explicit_user_id is not None else getattr(batch, "user_id", None)
+        if owner_user_id is not None:
+            dispatch_result = UserProducer(user_id=owner_user_id).push_urls_to_queue(request_id=batch_id)
+        else:
+            dispatch_result = push_urls_to_queue(request_id=batch_id)
 
         return {
             "status": "success",

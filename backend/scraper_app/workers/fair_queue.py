@@ -2,36 +2,25 @@
 backend/scraper_app/workers/fair_queue.py
 
 Dynamic Per-User Dedicated Queues & Fair Round-Robin Multi-Request Queue for Redis RQ.
-Subclasses DjangoRQ to provide fair, interleaved job dispatch across concurrent users and requests,
-with automatic lifecycle creation and deletion of user queues.
-
-How it works:
-1. Dynamic Per-User Queue Creation:
-   When an authenticated user triggers a scrape or jobs are pushed, a dedicated queue
-   'rq:queue:user_<user_id>' is instantiated and registered in 'rq:active_user_queues'
-   and 'rq:queues' (RQ Dashboard).
-2. Priority & Batch Subqueues:
-   - Priority URL discovery tasks go into 'rq:queue:user_<user_id>'.
-   - Restaurant jobs for specific batches go into 'rq:queue:user_<user_id>:batch:<batch_id>',
-     with batch UUIDs registered in 'rq:queue:user_<user_id>:batches'.
-3. Fair Interleaved Worker Dispatch:
-   Workers execute an atomic Lua script (LUA_DYNAMIC_PER_USER_FAIR_DEQUEUE) that rotates
-   the active user cursor (RPOPLPUSH) across users in O(1) time (<0.1ms), popping 1 job
-   per user so no user blocks or starves another.
-4. Automatic Lifecycle Deletion:
-   Immediately when all jobs for a user are completed (or upon cancellation/termination),
-   the Lua script automatically deletes the user queue keys from Redis RAM and unregisters
-   them from 'rq:active_user_queues' and 'rq:queues' (RQ Dashboard).
+Subclasses DjangoRQ to support:
+1. Strict Per-User Dedicated Worker Isolation (`isolated=True`):
+   Dedicated UserWorkerPool processes pop ONLY from their assigned user queue
+   ('rq:queue:user_<id>' and its ':batches' subqueues) using LUA_ISOLATED_QUEUE_DEQUEUE.
+2. Shared Fair Round-Robin Dispatch (`isolated=False`):
+   Shared/legacy workers rotate across 'rq:active_user_queues' via RPOPLPUSH in O(1) time
+   using LUA_DYNAMIC_PER_USER_FAIR_DEQUEUE and auto-clean empty user queues.
+3. Instant Wake-Up Signaling:
+   Publishes queue activation events to 'rq:user_queue_events' so the
+   MultiUserWorkerSupervisor can dynamically spawn dedicated workers for new users (<50ms).
 """
 
 import logging
-from typing import Any, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Iterable, List, Optional, Tuple, Type
 
 from django.conf import settings
 from django_rq.queues import DjangoRQ
 from redis import Redis
 from rq.job import Job, JobStatus
-from rq.serializers import resolve_serializer
 from rq.utils import as_text
 
 logger = logging.getLogger("fair_queue")
@@ -40,7 +29,46 @@ ACTIVE_USERS_KEY = "rq:active_user_queues"
 GLOBAL_QUEUES_KEY = "rq:queues"
 FALLBACK_QUEUE_KEY = "rq:queue:zomato"
 FALLBACK_BATCHES_KEY = "rq:queue:zomato:batches"
+USER_QUEUE_EVENTS_CHANNEL = "rq:user_queue_events"
 
+# Strictly scoped single-queue Lua script used by dedicated UserWorkerPool processes.
+# Guarantees a user's workers NEVER pop or inspect any other user's queue.
+LUA_ISOLATED_QUEUE_DEQUEUE = """
+-- KEYS[1] = Target queue key (e.g. 'rq:queue:user_110' or 'rq:queue:zomato')
+-- KEYS[2] = Target batches list (e.g. 'rq:queue:user_110:batches')
+-- ARGV[1] = Subqueue prefix (e.g. 'rq:queue:user_110:batch:')
+
+-- 1. Priority: check primary queue first (e.g. URL discovery tasks)
+local prio_job = redis.call('LPOP', KEYS[1])
+if prio_job then
+    return {KEYS[1], prio_job}
+end
+
+-- 2. Round-robin across this user's own active batch subqueues ONLY
+local num_batches = redis.call('LLEN', KEYS[2])
+if num_batches > 0 then
+    for b = 1, num_batches do
+        local batch_id = redis.call('RPOPLPUSH', KEYS[2], KEYS[2])
+        local subq_key = ARGV[1] .. batch_id
+        local job_id = redis.call('LPOP', subq_key)
+        if job_id then
+            local rem_in_subq = redis.call('LLEN', subq_key)
+            if rem_in_subq == 0 then
+                redis.call('LREM', KEYS[2], 0, batch_id)
+                redis.call('DEL', subq_key)
+            end
+            return {KEYS[1], job_id}
+        else
+            redis.call('LREM', KEYS[2], 0, batch_id)
+            redis.call('DEL', subq_key)
+        end
+    end
+end
+
+return nil
+"""
+
+# Global fair round-robin Lua script across active users (used when isolated=False).
 LUA_DYNAMIC_PER_USER_FAIR_DEQUEUE = """
 -- KEYS[1] = Active users cursor list ('rq:active_user_queues')
 -- KEYS[2] = RQ global queues set ('rq:queues')
@@ -150,9 +178,14 @@ return nil
 
 class FairQueue(DjangoRQ):
     """
-    Subclass of DjangoRQ (and RQ Queue) providing dynamic per-user queues and
+    Subclass of DjangoRQ (and RQ Queue) providing dynamic per-user queues,
+    strict single-user isolated worker dequeueing (`isolated=True`), and
     fair round-robin scheduling across concurrent users and scrape requests.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.isolated: bool = bool(kwargs.pop("isolated", False))
+        super().__init__(*args, **kwargs)
 
     @classmethod
     def get_user_queue_name(cls, user_id_or_user: Any = None) -> str:
@@ -167,21 +200,38 @@ class FairQueue(DjangoRQ):
         u_str = str(user_id_or_user).strip()
         if not u_str or u_str == "None" or u_str == "0":
             return "zomato"
+        if u_str == "zomato" or u_str == "rq:queue:zomato":
+            return "zomato"
+        if u_str.startswith("rq:queue:"):
+            u_str = u_str.replace("rq:queue:", "", 1)
         if u_str.startswith("user_"):
             return u_str
         return f"user_{u_str}"
 
     @classmethod
-    def for_user(cls, user_id_or_user: Any = None, connection: Optional[Redis] = None) -> "FairQueue":
+    def resolve_queue(
+        cls,
+        queue_name: str,
+        connection: Optional[Redis] = None,
+        isolated: bool = False,
+    ) -> "FairQueue":
+        """Safely resolves any queue name ('user_<id>' or 'zomato') without DjangoRQ KeyError."""
+        clean_name = str(queue_name or "zomato").replace("rq:queue:", "").strip() or "zomato"
+        if connection is None:
+            import django_rq
+            connection = django_rq.get_connection("zomato")
+        return cls(name=clean_name, connection=connection, isolated=isolated)
+
+    @classmethod
+    def for_user(
+        cls,
+        user_id_or_user: Any = None,
+        connection: Optional[Redis] = None,
+        isolated: bool = False,
+    ) -> "FairQueue":
         """Factory method returning a FairQueue instance configured for the specified user."""
         q_name = cls.get_user_queue_name(user_id_or_user)
-        if connection is None:
-            try:
-                import django_rq
-                connection = django_rq.get_connection("zomato")
-            except Exception:
-                pass
-        return cls(name=q_name, connection=connection)
+        return cls.resolve_queue(q_name, connection=connection, isolated=isolated)
 
     @classmethod
     def get_active_user_queues(cls, connection: Redis) -> List[str]:
@@ -249,9 +299,53 @@ class FairQueue(DjangoRQ):
         death_penalty_class: Any = None,
     ) -> Optional[Tuple[Job, "FairQueue"]]:
         """
-        Dequeues a job using the atomic Lua round-robin script across active per-user queues.
-        Falls back to BLPOP on the primary queue when idle to avoid busy-polling.
+        Dequeues a job:
+        - When any queue in `queues` has `isolated=True` (dedicated UserWorkerPool workers),
+          pops strictly from those assigned queues ONLY (never touching other users).
+        - Otherwise, runs the global fair round-robin Lua script across active user queues.
         """
+        queue_list = list(queues) if queues else []
+        if queue_list and any(getattr(q, "isolated", False) for q in queue_list):
+            for target_q in queue_list:
+                raw_result = connection.eval(
+                    LUA_ISOLATED_QUEUE_DEQUEUE,
+                    2,
+                    target_q.key,
+                    f"{target_q.key}:batches",
+                    f"{target_q.key}:batch:",
+                )
+                if raw_result:
+                    q_k, j_id = map(as_text, raw_result)
+                    res = cls._fetch_dequeued_job(
+                        connection,
+                        q_k,
+                        j_id,
+                        job_class=job_class,
+                        serializer=serializer,
+                        death_penalty_class=death_penalty_class,
+                    )
+                    if res:
+                        job_obj, fetched_q = res
+                        return job_obj, cls.resolve_queue(fetched_q.name, connection=connection, isolated=True)
+
+            if timeout and timeout > 0:
+                keys_to_wait = [q.key for q in queue_list]
+                blpop_res = connection.blpop(keys_to_wait, timeout=min(int(timeout), 1))
+                if blpop_res:
+                    q_k, j_id = map(as_text, blpop_res)
+                    res = cls._fetch_dequeued_job(
+                        connection,
+                        q_k,
+                        j_id,
+                        job_class=job_class,
+                        serializer=serializer,
+                        death_penalty_class=death_penalty_class,
+                    )
+                    if res:
+                        job_obj, fetched_q = res
+                        return job_obj, cls.resolve_queue(fetched_q.name, connection=connection, isolated=True)
+            return None
+
         raw_result = connection.eval(
             LUA_DYNAMIC_PER_USER_FAIR_DEQUEUE,
             4,
@@ -288,7 +382,7 @@ class FairQueue(DjangoRQ):
 
         return None
 
-    def enqueue_call(self, *args, **kwargs):
+    def enqueue_call(self, *args: Any, **kwargs: Any) -> Job:
         """Bypasses DjangoRQ's QUEUES[name] dictionary lookup to support dynamic user queues."""
         if "result_ttl" not in kwargs or kwargs["result_ttl"] is None:
             kwargs["result_ttl"] = getattr(settings, "RQ_RESULT_TTL", 500)
@@ -297,7 +391,7 @@ class FairQueue(DjangoRQ):
         return super(DjangoRQ, self).enqueue_call(*args, **kwargs)
 
     def push_job_id(self, job_id: str, pipeline: Optional[Any] = None, at_front: bool = False) -> None:
-        """Pushes a job ID on the corresponding Redis queue and registers queue in active list."""
+        """Pushes a job ID on the corresponding Redis queue and notifies MultiUserWorkerSupervisor."""
         pipe = pipeline if pipeline is not None else self.connection.pipeline()
         pipe.lrem(ACTIVE_USERS_KEY, 0, self.name)
         pipe.rpush(ACTIVE_USERS_KEY, self.name)
@@ -307,6 +401,8 @@ class FairQueue(DjangoRQ):
             pipe.lpush(self.key, job_id)
         else:
             pipe.rpush(self.key, job_id)
+
+        pipe.publish(USER_QUEUE_EVENTS_CHANNEL, self.name)
 
         if pipeline is None:
             pipe.execute()
@@ -386,6 +482,8 @@ class FairQueue(DjangoRQ):
         # Standard jobs go to the primary queue list
         if standard_job_ids:
             pipe.rpush(self.key, *standard_job_ids)
+
+        pipe.publish(USER_QUEUE_EVENTS_CHANNEL, self.name)
 
         if pipeline is None:
             pipe.execute()

@@ -27,6 +27,72 @@ from scraper_app.tasks.base import DEFAULT_RETRY, check_and_wait_if_paused
 logger = logging.getLogger("producer")
 
 
+class UserProducer:
+    """
+    Isolated per-user Producer bound strictly to a user's dedicated Redis queue ('user_<id>').
+    Each active user gets an independent producer context for request dispatch,
+    discovered URL enqueueing, and user-scoped batch advancement.
+    """
+
+    def __init__(
+        self,
+        user: Optional[Any] = None,
+        user_id: Optional[Any] = None,
+        connection: Optional[Any] = None,
+    ) -> None:
+        if user is not None and user_id is None and hasattr(user, "id") and getattr(user, "is_authenticated", False):
+            user_id = user.id
+        elif isinstance(user, int) and user_id is None:
+            user_id = user
+            user = None
+        self.user = user
+        self.user_id = user_id
+        self.connection = connection
+        from scraper_app.workers.fair_queue import FairQueue
+        self.queue_name = FairQueue.get_user_queue_name(user_id if user_id is not None else user)
+
+    def get_queue(self, isolated: bool = False) -> Any:
+        """Returns this user's dedicated FairQueue, or fallback 'zomato' queue when unowned."""
+        if self.user_id or (self.user and getattr(self.user, "is_authenticated", False)):
+            from scraper_app.workers.fair_queue import FairQueue
+            conn = self.connection or django_rq.get_connection("zomato")
+            return FairQueue.for_user(
+                self.user_id if self.user_id is not None else self.user,
+                connection=conn,
+                isolated=isolated,
+            )
+        default_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+        return django_rq.get_queue(default_name)
+
+    def push_urls_to_queue(self, request_id: str) -> Dict[str, Any]:
+        """Enqueues all pending RestaurantJob rows for `request_id` strictly into this user's queue."""
+        return push_urls_to_queue(request_id=request_id, user_id=self.user_id)
+
+    def dispatch_scrape_request(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Dispatches a scrape request strictly using this user's dedicated queue and batch ownership."""
+        kwargs.setdefault("user", self.user if self.user is not None else self.user_id)
+        return dispatch_scrape_request(*args, **kwargs)
+
+    def start_queued_batch(self, queued_batch: Any) -> Dict[str, Any]:
+        """Starts a queued batch strictly inside this user's dedicated queue."""
+        return start_queued_batch(queued_batch)
+
+    def complete_or_terminate_batch_and_advance(
+        self,
+        batch: ScrapeBatch,
+        status: str = "completed",
+        delay_seconds: float = 5.0,
+        error_message: str = "",
+    ) -> Optional[ScrapeBatch]:
+        """Finishes `batch` and advances ONLY the next queued batch owned by the same user."""
+        return complete_or_terminate_batch_and_advance(
+            batch=batch,
+            status=status,
+            delay_seconds=delay_seconds,
+            error_message=error_message,
+        )
+
+
 def enqueue_pipeline_restaurant_job(
     batch_id: str,
     job_record_id: Optional[int] = None,
@@ -41,7 +107,12 @@ def enqueue_pipeline_restaurant_job(
 ) -> Job:
     """Enqueues a restaurant pipeline job with retry configuration."""
     target_queue = queue_name or getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-    queue = django_rq.get_queue(target_queue)
+    default_queue = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
+    if target_queue != default_queue:
+        from scraper_app.workers.fair_queue import FairQueue
+        queue = FairQueue.resolve_queue(target_queue)
+    else:
+        queue = django_rq.get_queue(target_queue)
     from scraper_app.tasks.restaurant_extractor import process_restaurant_pipeline_job
     retry_obj = retry if retry is not None else DEFAULT_RETRY
     return queue.enqueue(
@@ -361,11 +432,19 @@ def dispatch_scrape_request(
 
     location_key = generate_location_key(city_str or "direct", location_raw)
 
+    batch_user = None
+    batch_user_id = None
+    if isinstance(user, int):
+        batch_user_id = user
+    elif user is not None and getattr(user, "is_authenticated", False):
+        batch_user = user
+    elif user is not None:
+        batch_user = user
+
     # 1. Create ScrapeBatch in PostgreSQL ('zomato_batches') storing lat/long with requestid PK
-    batch = ScrapeBatch.objects.create(
+    batch_create_kwargs = dict(
         batch_id=batch_uuid,
         request_id=batch_id_str,
-        user=user,
         location_key=location_key,
         city=city_str or "Direct URL",
         location=location_title if not rest_url_str else "Direct Restaurant URL",
@@ -379,14 +458,16 @@ def dispatch_scrape_request(
         is_cached=False,
         fields_selected=fields,
     )
-
-    if user and (getattr(user, "is_authenticated", False) or isinstance(user, int)):
-        from scraper_app.workers.fair_queue import FairQueue
-        queue = FairQueue.for_user(user, connection=django_rq.get_connection("zomato"))
-        queue_name = queue.name
+    if batch_user_id is not None:
+        batch_create_kwargs["user_id"] = batch_user_id
     else:
-        queue_name = getattr(settings, "SINGLE_QUEUE_NAME", SINGLE_QUEUE_NAME)
-        queue = django_rq.get_queue(queue_name)
+        batch_create_kwargs["user"] = batch_user
+
+    batch = ScrapeBatch.objects.create(**batch_create_kwargs)
+
+    producer_ctx = UserProducer(user=batch_user, user_id=batch_user_id)
+    queue = producer_ctx.get_queue()
+    queue_name = queue.name
 
     # Case A: Direct restaurant URL scraping
     if rest_url_str:
@@ -585,10 +666,15 @@ def complete_or_terminate_batch_and_advance(
         batch.error_message = error_message
     batch.save(update_fields=["status", "progress", "completed_at", "error_message", "updated_at"])
 
-    # Auto-start any queued batch waiting without purging the queue
-    next_batch = ScrapeBatch.objects.filter(
+    # Auto-start any queued batch belonging strictly to the SAME user without purging other users' queues
+    next_qs = ScrapeBatch.objects.filter(
         status__in=["queued", "pending"]
-    ).exclude(requestid=batch.requestid).order_by("created_at").first()
+    ).exclude(requestid=batch.requestid)
+    if getattr(batch, "user_id", None):
+        next_qs = next_qs.filter(user_id=batch.user_id)
+    else:
+        next_qs = next_qs.filter(user__isnull=True)
+    next_batch = next_qs.order_by("created_at").first()
 
     if next_batch:
         logger.info("[PRODUCER] Auto-starting queued batch %s (%s, %s)...", next_batch.requestid, next_batch.city, next_batch.location)

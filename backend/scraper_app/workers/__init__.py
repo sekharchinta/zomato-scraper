@@ -3,6 +3,8 @@ workers package exports.
 """
 
 from scraper_app.workers.worker import (
+    MultiUserWorkerSupervisor,
+    UserWorkerPool,
     WorkerManager,
     process_restaurant_pipeline_job,
     generate_review_api_urls,
@@ -20,6 +22,8 @@ from scraper_app.workers.worker_lock import (
 )
 
 __all__ = [
+    "MultiUserWorkerSupervisor",
+    "UserWorkerPool",
     "WorkerManager",
     "process_restaurant_pipeline_job",
     "generate_review_api_urls",
